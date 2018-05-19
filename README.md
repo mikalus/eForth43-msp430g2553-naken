@@ -10,7 +10,7 @@ Ported to Naken Assembler by M.Kalus 2018
 
 ---
 
-##Assemble eForth 
+## Assemble eForth 
 
 Open a command prompt window. Change to the directory with your source code. Type:
 
@@ -18,7 +18,7 @@ Open a command prompt window. Change to the directory with your source code. Typ
 
 Have fun, mk
 
-##Start with Forth
+## Start with Forth
 
 - Quickstart: Connect to eForth on your Launchapd using a terminal emulator. Compile and save demo forth applikation: blink.4th..
 eForth is CASE SENSITIVE : Type all words in uppercase.
@@ -37,7 +37,7 @@ Read the included eForth_Overview.pdf to understand eforth.
 
 - More books : https://wiki.forth-ev.de/doku.php/projects:ting_s_electronic_forth_bookshelf 
   
-##Verification: 
+## Verification: 
 
 430eforth.a43
   Reading Code File ...........................	 done
@@ -53,7 +53,7 @@ eForth WORDS are the same. See: screenshots of old (CCS) an new (naken) version.
 
 WORDS .S and some compiling are ok.
  
-##to do
+## To Do
 
 Discard input stream if an error occurs.
 
