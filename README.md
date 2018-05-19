@@ -54,7 +54,7 @@ Verification:
 
 The eForth43-msp430g2553-naken.hex image differs from the original 430eforth.a43 file. A code-block had to be put to an end position.
 
-eForth WORDS are the same. See: screenshots of old (CCS) an new (naken_am) version.
+eForth WORDS are the same. See: screenshots of old (CCS) an new (naken) version.
 
 WORDS .S and some compiling are ok.
  
