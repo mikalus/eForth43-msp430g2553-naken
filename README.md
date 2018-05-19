@@ -10,7 +10,7 @@ Ported to Naken Assembler by M.Kalus 2018
 
 ---
 
-Assemble eForth 
+##Assemble eForth 
 
 Open a command prompt window. Change to the directory with your source code. Type:
 
@@ -18,31 +18,26 @@ Open a command prompt window. Change to the directory with your source code. Typ
 
 Have fun, mk
 
----
+##Start with Forth
 
-Start with Forth
+- Quickstart: Connect to eForth on your Launchapd using a terminal emulator. Compile and save demo forth applikation: blink.4th..
+eForth is CASE SENSITIVE : Type all words in uppercase.
 
-- Quickstart: Connect to eForth on your Launchapd using a terminal emulator. Compile and save demo forth applikation: blink.4th
+- New to forth? : https://wiki.forth-ev.de/doku.php/en:projects:a-start-with-forth:start0..
+There are various forth system mentioned, but the handling is the same.
 
-  eForth is CASE SENSITIVE : Type all words in uppercase.
+- New to LaunchPad? : https://wiki.forth-ev.de/doku.php/projects:4e4th:start..
+That's another forth, but the handling is the same. 
 
-- New to forth? : https://wiki.forth-ev.de/doku.php/en:projects:a-start-with-forth:start0
-  There are various forth system mentioned, but the handling is the same.
+- New to eForth?..
+Read the included eForth_Overview.pdf to understand eforth.
 
-- New to LaunchPad? : https://wiki.forth-ev.de/doku.php/projects:4e4th:start
-  That's another forth, but the handling is the same. 
-
-- New to eForth? 
-  Read the included eForth_Overview.pdf to understand eforth.
-
-- Need a Programmer? : https://www.elprotronic.com/
-  "Lite FET-Pro430 Elprotronic Programer" burns image into MCU.
+- Need a Programmer? : https://www.elprotronic.com/..
+"Lite FET-Pro430 Elprotronic Programer" burns image into MCU.
 
 - More books : https://wiki.forth-ev.de/doku.php/projects:ting_s_electronic_forth_bookshelf 
   
----
-
-Verification: 
+##Verification: 
 
 430eforth.a43
   Reading Code File ...........................	 done
@@ -58,8 +53,8 @@ eForth WORDS are the same. See: screenshots of old (CCS) an new (naken) version.
 
 WORDS .S and some compiling are ok.
  
----
+##to do
 
-To do: Discard input stream if an error occurs.
+Discard input stream if an error occurs.
 
 (finis)
