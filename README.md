@@ -19,10 +19,10 @@ Have fun, mk
 
 ## Start with Forth
 
-- Quickstart: Connect to eForth on your Launchapd using a terminal emulator. Compile and save demo forth applikation: blink.4th  
+- Quickstart : Connect to eForth on your Launchapd using a terminal emulator. Compile and save demo forth applikation: blink.4th  
 eForth is CASE SENSITIVE : Type all words in uppercase.
-- How does eforth get into the mcu of the launchpad?  
-https://wiki.forth-ev.de/doku.php/projects:4e4th:start#programmer  
+
+- How does eforth get into the mcu of the launchpad? https://wiki.forth-ev.de/doku.php/projects:4e4th:start#programmer  
 That's another forth, but the handling is the same.
 
 - New to LaunchPad? : https://wiki.forth-ev.de/doku.php/projects:4e4th:start  
