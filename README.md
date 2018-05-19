@@ -8,9 +8,11 @@ Chen-Hanson Ting, Offete Enterprises, Inc. 2015
 
 Ported to Naken Assembler by M.Kalus 2018
 
+---
 
+Assemble eForth 
 
-Assemble a fresh eForth:
+Open a command prompt window. Change to the directory with your source code. Type:
 
  naken_asm -l -o eForth43-msp430g2553-naken.hex eForth43-msp430g2553-naken.asm 
 
@@ -18,7 +20,10 @@ Have fun, mk
 
 ---
 
-- Quickstart: Run eForth, compile and save demo forth applikation: blink.4th
+Start with Forth
+
+- Quickstart: Connect to eForth on your Launchapd using a terminal emulator. Compile and save demo forth applikation: blink.4th
+
   eForth is CASE SENSITIVE : Type all words in uppercase.
 
 - New to forth? : https://wiki.forth-ev.de/doku.php/en:projects:a-start-with-forth:start0
@@ -30,12 +35,14 @@ Have fun, mk
 - New to eForth? 
   Read the included eForth_Overview.pdf to understand eforth.
 
-- Programmer? : https://www.elprotronic.com/
+- Need a Programmer? : https://www.elprotronic.com/
   "Lite FET-Pro430 Elprotronic Programer" burns image into MCU.
+
+- More books : https://wiki.forth-ev.de/doku.php/projects:ting_s_electronic_forth_bookshelf 
   
 ---
 
-Verifikation: 
+Verification: 
 
 430eforth.a43
   Reading Code File ...........................	 done
