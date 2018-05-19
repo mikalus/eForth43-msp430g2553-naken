@@ -20,7 +20,9 @@ Have fun, mk
 It is easy to program eForth into the TI MSP430 Launchpad.  
 Download and install the free 430 version of the elprotronic programmer at  
 https://www.elprotronic.com/productdata;jsessionid=8FA5E1E626677AABC3683EC0D712B01F  
-Select the correct processor 430G2553, point to the hex file you find here and follow the steps.  
+Select the correct processor 430G2553, point to the hex file you find here:  
+https://github.com/mikalus/eForth43-msp430g2553-naken/blob/master/eForth43-msp430g2553-naken.hex  
+and follow the steps.  
 Do not forget RESET after programming.
 
 Then start your favourite Terminal program and start writing short examples, like in  
