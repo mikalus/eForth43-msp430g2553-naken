@@ -1,5 +1,3 @@
----
-
 # eForth
 
 *** debug release ***
@@ -10,7 +8,7 @@ Chen-Hanson Ting, Offete Enterprises, Inc. 2015
 
 Ported to Naken Assembler by M.Kalus 2018
 
----
+-----
 
 ## Assemble eForth
 
