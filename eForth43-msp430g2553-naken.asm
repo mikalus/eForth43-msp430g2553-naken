@@ -25,7 +25,8 @@
 ; 10/11/2014 430eForth4.1 Direct thread, more optimization
 ; 10/23/2014 430eForth4.2 Direct thread, pack lists
 ; 11/12/2014 430eForth4.2 Direct thread, final
-; 05/13/2018 Move 430eForth4.3 from CSS to Michael Kohn's naken_asm (ver. 23 april 2018) - ok 
+; 05/13/2018 Moved 430eForth4.3 from CSS to Michael Kohn's naken_asm (ver. 23 april 2018) - ok ;mk 
+; 20180624 $," - bug fixed. Thanks to Manfred Mahlow. ;mk
 
 ; Build for and verified on MSP430G2 LaunchPad from TI
 ; Assembled with Code Composer Sudio 6.0 IDE
@@ -1687,7 +1688,8 @@ LITER:
 ;	.db 3,"$,"""
 STRCQ:
 	INEST
-	.dw	DOLIT,""""
+;    .dw     DOLIT,""""      ; MM-180624 assembles to |DOLIT|0000H|
+    .dw     DOLIT,0022H     ;           should be |DOLIT|ASCII(")|
 	.dw	WORDD	;move string to code dictionary
 	.dw	STRCQ1,EXIT
 
