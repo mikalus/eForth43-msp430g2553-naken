@@ -7,8 +7,8 @@ eForth and application will run ON this chip.
 Chen-Hanson Ting, Offete Enterprises, Inc. 2015
 
 Uses here the free Naken Assembler https://github.com/mikeakohn/naken_asm  
-Ported to Naken Assembler by M.Kalus, May 2018
-Debuged and contribution of Flash Tools by Manfred Mahlow, Jul 2018            
+Ported to Naken Assembler by M.Kalus, May 2018  
+Debuged and contribution of Flash Tools by Manfred Mahlow, Jul 2018
 
 ## Contributions
 
@@ -28,7 +28,7 @@ Flash is full. Only then you have to re-flash.
 QFLASH
 Aborts compilation with message "?flash" when the flash is full (CP >= $FFC0)
 
-FlashTools43n1.efs
+### FlashTools43n1.efs
 
 Source code file to be included in a newly flashed 430eForth43n1. Adds the words SAVE, RESET and MARKER.
 
