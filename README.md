@@ -106,7 +106,7 @@ Their experience: again a software that does not work properly.
 Or worse, keep away from Forth. :-(
 Therefore, there is the version 43n1 without reset trap. You can work with it like
 with Forth in RAM until the flash is full. Then there is the error message
-"? Flash". The interpreter still works, but compiling is no longer possible
+"? Flash". The interpreter still works, but compiling is no longer possible, 
 again the error message. You have to re-flash.
 Otherwise, 43n1 behaves like 43 (n), so also fits to Jürgen's books
 and will also work fully with the IDE as described.
