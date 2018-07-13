@@ -1,3 +1,4 @@
+<<<<<<< HEAD:430eForth43n-180711 - preliminary version/eForth43-msp430g2553-naken.asm
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;
 ; This is a 430eForth assembler listing based on the original script from 
@@ -30,6 +31,26 @@
 ; SOFTWARE.
 ;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+=======
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;CCS:   ;ting
+;	.nolist 
+;	.title "msp430 eForth 4.3" 
+;	.cdecls C,LIST,"msp430g2553.h"  ; Include device header file 
+
+;naken: ;mk
+    .msp430 
+    .include "msp430g2553.inc"  ; MCU-specific register equates for naken_asm
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; This is the original from Dr. Chen-Hanson Ting as described in his book:
+; Zen and the Forth Language: EFORTH for the MSP430 from Texas Instruments (Kindle Edition).
+; It was first written by him in IAR Assembler, then transferred to the CCS. 
+; And now adapted by Michael Kalus for the naken_ass. 
+; It is currently being debugged by Manfred Mahlow. ;mk
+>>>>>>> 8dbd5c40346bb45a6973eb896251095ee058aa7e:eForth43-msp430g2553-naken.asm
 ;
 ; 7/7/2012 430eForth1.0, from eForth86.asm and 430uForth
 ; 7/4/2012 Move 430uForth2.1 from IAR to CCS 5.2
