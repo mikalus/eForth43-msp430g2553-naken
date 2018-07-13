@@ -96,6 +96,27 @@ Code size = 0x10B8 ( 4280 ) bytes
 The eForth431-msp430g2553-naken.hex image differs from the original 430eforth.a43 file. A code-block had to be put to an end position, 2 bugs fixed, tiny tools added. Original eForth WORDS are the same. See: screenshots of old (CCS) and new (naken) version.  
 WORDS .S and some compiling are ok.  
 
+## Why Version 4.3.1 ?
+
+430eForth43 (n) has the serious shortcoming of the reset trap. Curious,
+be it beginners or professionals, quickly fall in without suspecting
+what's going on there. They usually do not know anything about  
+  ' HI APP!  
+Their experience: again a software that does not work properly.
+Or worse, keep away from Forth. :-(
+Therefore, there is the version 43n1 without reset trap. You can work with it like
+with Forth in RAM until the flash is full. Then there is the error message
+"? Flash". The interpreter still works, but compiling is no longer possible
+again the error message. You have to re-flash.
+Otherwise, 43n1 behaves like 43 (n), so also fits to Jürgen's books
+and will also work fully with the IDE as described.
+
+Those interested should use the newer version 43n1.
+
+Background knowledge on the reset trap:  
+Vierte Dimension 3/2017, "Das RAM–ROM–Dilemma von interaktivem Forth in kleinen MCUs", Michael Kalus.  
+https://wiki.forth-ev.de/lib/exe/fetch.php/vd-archiv:4d2017-03.pdf  
+
 ## To Do
 Discard input stream if an error occurs.
 
