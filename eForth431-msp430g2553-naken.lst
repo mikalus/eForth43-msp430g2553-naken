@@ -1,0 +1,4331 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; This is a 430eForth assembler listing based on the original script from
+; Dr. Chen Hanson Ting as described in his book: Zen and the Forth Language:
+; EFORTH for the MSP430 from Texas Instruments (Kindle Edition). It was first
+; written by him in IAR Assembler, then transferred to the CCS and now adapted
+; by Michael Kalus for the naken_asm.
+;
+; MIT License
+; ----------------------------------------------------------------------------
+; Copyright (c) 2014 Dr. Chen-Hanson Ting  CCS Version    430eForth4.3
+;           (c) 2018 Michael Kalus         Naken Version  430eForth4.3n
+;           (c) 2018 Manfred Mahlow          Flash Tools  430eForth4.3n1
+;
+; Permission is hereby granted, free of charge, to any person obtaining a copy
+; of this software and associated documentation files (the "Software"), to deal
+; in the Software without restriction, including without limitation the rights
+; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+; copies of the Software, and to permit persons to whom the Software is
+;furnished to do so, subject to the following conditions:
+;
+; The above copyright notice and this permission notice shall be included in all
+; copies or substantial portions of the Software.
+;
+; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+; SOFTWARE.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; 7/7/2012 430eForth1.0, from eForth86.asm and 430uForth
+; 7/4/2012 Move 430uForth2.1 from IAR to CCS 5.2
+; 8/5/2014 Move 430eForth2.2 to CCS 6.0.  Fix linkage of OVER.
+;	Software UART at 2400 baud.
+; 8/10/2014 430eForth2.3 9600 baud, thanks to Dirk Bruehl and
+;	Michael Kalus of www.4e4th.org
+; 8/10/2014 430eForth2.4 Restore ERASE and WRITE
+; 8/20/2014 430eForth2.5 Test Segment D
+; 8/25/2014 430eForth2.6 Turnkey
+; 8/26/2014 430eForth2.7 Optimize
+; 9/16/2014 430eForth3.1 Tail recursion, APP!
+; 10/11/2014 430eForth4.1 Direct thread, more optimization
+; 10/23/2014 430eForth4.2 Direct thread, pack lists
+; 11/12/2014 430eForth4.2 Direct thread, final
+;
+; Build for and verified on MSP430G2 LaunchPad from TI
+; Assembled with Code Composer Sudio 6.0 IDE
+; Internal DCO at 8 MHz
+; Hardware UART at 9600 baud. TXD and RXD must be crossed.
+
+;CCS:   ;ting
+;	.nolist 
+;	.title "msp430 eForth 4.3" 
+;	.cdecls C,LIST,"msp430g2553.h"  ; Include device header file 
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; 05/13/2018 Moved 430eForth4.3 from CSS to Michael Kohn's naken_asm (ver.
+;            23 april 2018) - ok                                           ;mk
+; 20180624 $," - bug fixed. Thanks to Manfred Mahlow.                      ;mk
+; 20180628 DIGIT? : bug fix, 0= 0> were handled as numbers                 ;MM
+; 20180629 FSCAN added, sets CP to the lowest free flash addr at BOOT time.
+;          FSCAN is executed before COLD executes QUIT.
+;          Version string changed in HI from 43n to 43n1.                  ;MM
+; 20180630 ERASE and WRITE renamed to IERASE IWRITE due to name conflict   ;MM
+; 20180701 LITERAL and ALIGNED revealed.                                   ;MM
+; 20180707 Flash Test QFLASH ( a -- a ) added. Aborts with message ?flash
+;          if a > EDM. (EDM = End of Dictionary Memory space in the flash) ;MM
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;naken: ;mk
+    .msp430 
+    .include "msp430g2553.inc"  ; MCU-specific register equates for naken_asm
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Direct Thread Model of eForth
+
+; CCS: .equ ; naken: equ   ;mk
+;;	CPU registers
+tos	equ	R4
+stack   equ	R5
+ip	equ	R6
+temp0	equ	R7
+temp1	equ	R8
+temp2	equ	R9
+temp3	equ	R10
+
+;; Macros
+; CCS: <name> .macro ; naken: .macro <name>   ;mk
+.macro pops	;DROP
+	mov.w	@stack+,tos
+    .endm
+
+.macro pushs ;DUP
+	decd.w	stack
+	mov.w	tos,0(stack)
+    .endm;; Constants
+
+.macro INEXT ;mk renamed (dollar)NEXT to INEXT - inline code for NEXT.
+	mov @ip+,pc	; fetch code address into PC
+    .endm
+
+.macro INEST ;mk renamed (dollar)NEST to INEST - inline code for NEST.
+	.align	16  ; CCS: 2 bytes align ; naken: 16 bit align. mk
+	call	#DOLST	; fetch code address into PC, W=PFA
+    .endm
+
+.macro ICONST ;mk renamed (dollar)CONST to ICONST - inline code calling DOCON.
+	.align	16  ; CCS: 2 bytes align ; naken: 16 bit align. mk
+	call	#DOCON	; fetch code address into PC, W=PFA
+	.endm
+
+;; Assembler constants
+
+COMPO	equ	040H	;lexicon compile only bit
+IMEDD	equ	080H	;lexicon immediate bit
+MASKK	equ	07F1FH	;lexicon bit mask
+CELLL	equ	2	;size of a cell
+BASEE	equ	10	;default radix
+VOCSS	equ	8	;depth of vocabulary stack
+BKSPP	equ	8	;backspace
+LF	    equ	10	;line feed
+CRR	    equ	13	;carriage return
+ERR	    equ	27	;error escape
+TIC	    equ	39	;tick
+CALLL	equ	012B0H	;NOP CALL opcodes
+
+UPP	    equ	200H
+DPP	    equ	220H
+SPP	    equ	378H	;data stack
+TIBB	equ	380H	;terminal input buffer
+RPP	    equ	3F8H	;return stacl
+CODEE	equ	0C000H	;code dictionary
+COLDD	equ	0FFFEH	;cold start vector
+EM	    equ	0FFFFH	;top of memory
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+	.list
+
+;;;;
+;; Main entry points and COLD start data
+
+;	.text       ; CCS: Predefined Memory Segment Name : Main memory (flash or ROM)
+    .org 0C000H ; naken : MSP430G2553 main memory : C000-FFFF = 16KB flash ROM 
+                ;                                   FFE0-FFFF = interrupt vectors
+
+;	.global	main ; CCS: File Reference Directive 
+                 ; unused in naken
+
+main: 
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Device dependent I/O
+
+;   ?KEY	( -- F | c T )
+;	Return input character.
+	.dw	0
+	.db	4,"?KEY",0
+QKEY:
+	pushs
+
+0xc008: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc00a: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc00c: 0x0000
+
+QKEY1:
+	BIT.B   #UCA0RXIFG,&IFG2
+
+0xc00e: 0xb3d2 bit.b #1, &0x0003                        cycles: 4
+0xc010: 0x0003
+
+	JZ	FALSE	;return false flag
+
+0xc012: 0x24c3 jeq 0xc19a  (offset: 390)                cycles: 2
+
+	MOV.B   &UCA0RXBUF,tos	; read character into TOS
+
+0xc014: 0x4254 mov.b &0x0066, r4                        cycles: 3
+0xc016: 0x0066
+
+	pushs
+
+0xc018: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc01a: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc01c: 0x0000
+
+	jmp	TRUE
+
+0xc01e: 0x3cbf jmp 0xc19e  (offset: 382)                cycles: 2
+
+
+;   KEY	( -- c )
+;	Return input character.
+	.dw	QKEY-6
+	.db 3,"KEY"
+KEY: ;mk naken needs colon after label. 
+	pushs
+
+0xc026: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc028: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc02a: 0x0000
+
+KEY1:
+	BIT.B   #UCA0RXIFG,&IFG2
+
+0xc02c: 0xb3d2 bit.b #1, &0x0003                        cycles: 4
+0xc02e: 0x0003
+
+	JZ	KEY1
+
+0xc030: 0x27fd jeq 0xc02c  (offset: -6)                 cycles: 2
+
+	MOV.B   &UCA0RXBUF,tos	; read character into TOS
+
+0xc032: 0x4254 mov.b &0x0066, r4                        cycles: 3
+0xc034: 0x0066
+
+	INEXT
+
+0xc036: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   EMIT	( c -- )
+;	Send character c to the output device.
+	.dw	KEY-4
+	.db 4,"EMIT",0
+EMIT:
+EMIT1:
+	BIT.B   #UCA0TXIFG,&IFG2
+
+0xc040: 0xb3e2 bit.b #2, &0x0003                        cycles: 4
+0xc042: 0x0003
+
+	JZ	EMIT1
+
+0xc044: 0x27fd jeq 0xc040  (offset: -6)                 cycles: 2
+
+	MOV.B   tos,&UCA0TXBUF
+
+0xc046: 0x44c2 mov.b r4, &0x0067                        cycles: 4
+0xc048: 0x0067
+
+	pops
+
+0xc04a: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	INEXT
+
+0xc04c: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   !IO	( -- )
+;	Initialize the serial I/O devices.
+;	.dw	EMIT-6
+;	.db 3,"!IO"
+STOIO:
+; 8MHz
+	mov.b   &CALBC1_8MHZ, &BCSCTL1   ; Set DCO
+
+0xc04e: 0x42d2 mov.b &0x10fd, &0x0057                   cycles: 6
+0xc050: 0x10fd
+0xc052: 0x0057
+
+	mov.b   &CALDCO_8MHZ, &DCOCTL	; to 8 MHz.
+
+0xc054: 0x42d2 mov.b &0x10fc, &0x0056                   cycles: 6
+0xc056: 0x10fc
+0xc058: 0x0056
+
+	mov.b   #006h, &P1SEL	; Use P1.1/P1.2 for USCI_A0
+
+0xc05a: 0x40f2 mov.b #0x06, &0x0026                     cycles: 5
+0xc05c: 0x0006
+0xc05e: 0x0026
+
+	mov.b   #006h, &P1SEL2	; Use P1.1/P1.2 for USCI_A0
+
+0xc060: 0x40f2 mov.b #0x06, &0x0041                     cycles: 5
+0xc062: 0x0006
+0xc064: 0x0041
+
+; Configure UART (Koch)
+	bis.b   #UCSSEL_2,&UCA0CTL1	;db2 SMCLK
+
+0xc066: 0xd0f2 bis.b #0x80, &0x0061                     cycles: 5
+0xc068: 0x0080
+0xc06a: 0x0061
+
+	mov.b   #65,&UCA0BR0	;db3 8MHz 9600 Insgesamt &833 = $341
+
+0xc06c: 0x40f2 mov.b #0x41, &0x0062                     cycles: 5
+0xc06e: 0x0041
+0xc070: 0x0062
+
+	mov.b   #3,&UCA0BR1	;db4 8MHz 9600
+
+0xc072: 0x40f2 mov.b #0x03, &0x0063                     cycles: 5
+0xc074: 0x0003
+0xc076: 0x0063
+
+	mov.b   #UCBRS_2,&UCA0MCTL	;db5 Modulation UCBRSx = 2
+
+0xc078: 0x42e2 mov.b #4, &0x0064                        cycles: 4
+0xc07a: 0x0064
+
+	bic.b   #UCSWRST,&UCA0CTL1	;db6 **Initialize USCI
+
+0xc07c: 0xc3d2 bic.b #1, &0x0061                        cycles: 4
+0xc07e: 0x0061
+
+	INEXT	
+0xc080: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+;called from COLD
+
+;; The kernel
+
+;   doLIT	( -- w )
+;	Push an inline literal.
+;	.dw	STOIO-4
+;	.db COMPO+5,"doLIT"
+DOLIT:
+	pushs
+
+0xc082: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc084: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc086: 0x0000
+
+	mov	@ip+,tos
+
+0xc088: 0x4634 mov.w @r6+, r4                           cycles: 2
+
+	INEXT
+
+0xc08a: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   doCON	( -- a )
+;	Run time routine for CONSTANT, VARIABLE and CREATE.
+;	.dw	DOLIT-6
+;	.db COMPO+5,"doCON"
+DOCON:
+	pushs
+
+0xc08c: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc08e: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc090: 0x0000
+
+	pop	tos
+
+0xc092: 0x4134 pop.w r4   --  mov.w @SP+, r4            cycles: 2
+
+	mov	@tos,tos
+
+0xc094: 0x4424 mov.w @r4, r4                            cycles: 2
+
+	INEXT
+
+0xc096: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   doLIST	( -- )
+;	Process colon list..
+;	.dw	EMIT-6
+;	.db 6,"doLIST",0
+DOLST:
+	mov	ip,temp0	;exchange pointers
+
+0xc098: 0x4607 mov.w r6, r7                             cycles: 1
+
+	pop	ip	;push return stack
+
+0xc09a: 0x4136 pop.w r6   --  mov.w @SP+, r6            cycles: 2
+
+	push	temp0	;restore the pointers
+
+0xc09c: 0x1207 push.w r7                                cycles: 3
+
+	INEXT
+
+0xc09e: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   EXIT	( -- )
+;	Terminate a colon definition.
+	.dw	EMIT-6
+	.db 4,"EXIT",0
+EXIT:
+	mov	@sp+,ip
+
+0xc0a8: 0x4136 pop.w r6   --  mov.w @SP+, r6            cycles: 2
+
+	INEXT
+
+0xc0aa: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   EXECUTE	( ca -- )
+;	Execute the word at ca.
+	.dw	EXIT-6
+	.db 7,"EXECUTE"
+EXECU:
+	mov	tos,temp0
+
+0xc0b6: 0x4407 mov.w r4, r7                             cycles: 1
+
+	pops
+
+0xc0b8: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	br	temp0
+
+0xc0ba: 0x4700 mov.w r7, PC                             cycles: 2
+
+
+;   @EXECUTE	( a -- )
+;	Execute vector stored in address a.
+	.dw	EXECU-8
+	.db 8,"@EXECUTE",0
+ATEXE:
+	mov	@tos,temp0
+
+0xc0c8: 0x4427 mov.w @r4, r7                            cycles: 2
+
+	pops
+
+0xc0ca: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	br	temp0
+
+0xc0cc: 0x4700 mov.w r7, PC                             cycles: 2
+
+
+;   branch	( -- )
+;	Branch to an inline address.
+;	.dw	ATEXE-10
+;	.db COMPO+6,"branch",0
+BRAN:
+	mov	@ip+,ip
+
+0xc0ce: 0x4636 mov.w @r6+, r6                           cycles: 2
+
+	INEXT
+
+0xc0d0: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   ?branch	( f -- )
+;	Branch if flag is zero.
+;	.dw	BRAN-8
+;	.db COMPO+7,"?branch"
+QBRAN:
+	tst	tos
+
+0xc0d2: 0x9304 cmp.w #0, r4                             cycles: 1
+
+	pops
+
+0xc0d4: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	jz	BRAN
+
+0xc0d6: 0x27fb jeq 0xc0ce  (offset: -10)                cycles: 2
+
+	jmp	SKIP
+
+0xc0d8: 0x3c04 jmp 0xc0e2  (offset: 8)                  cycles: 2
+
+
+;   next	( -- )
+;	Run time code for the single index loop.
+;	: next ( -- ) \ hilevel model
+;	r> r> dup if 1 - >r @ >r exit then drop cell+ >r ;
+;	.dw	QBRAB-8
+;	.db COMPO+4,"next",0
+DONXT:
+	dec	0(sp)   ;decrement index
+
+0xc0da: 0x8391 sub.w #1, 0(SP)                          cycles: 4
+0xc0dc: 0x0000
+
+	jge	BRAN	;loop back
+
+0xc0de: 0x37f7 jge 0xc0ce  (offset: -18)                cycles: 2
+
+	incd.w	sp	;discard index
+
+0xc0e0: 0x5321 add.w #2, SP                             cycles: 1
+
+SKIP:
+	incd.w	ip	;exit loop
+
+0xc0e2: 0x5326 add.w #2, r6                             cycles: 1
+
+	INEXT
+
+0xc0e4: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   !	( w a -- )
+;	Pop the data stack to memory.
+	.dw	ATEXE-10
+	.db 1,"!"
+STORE:
+	mov.w	@stack+,0(tos)
+
+0xc0ea: 0x45b4 mov.w @r5+, 0(r4)                        cycles: 5
+0xc0ec: 0x0000
+
+	pops
+
+0xc0ee: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	INEXT
+
+0xc0f0: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   @	( a -- w )
+;	Push memory location to the data stack.
+	.dw	STORE-2
+	.db 1,"@"
+AT:
+	mov.w	@tos,tos
+
+0xc0f6: 0x4424 mov.w @r4, r4                            cycles: 2
+
+	INEXT
+
+0xc0f8: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   C!	( c b -- )
+;	Pop the data stack to byte memory.
+	.dw	AT-2
+	.db 2,"C!",0
+CSTOR:
+	mov.b	@stack+,0(tos)
+
+0xc100: 0x45f4 mov.b @r5+, 0(r4)                        cycles: 5
+0xc102: 0x0000
+
+	inc	stack
+
+0xc104: 0x5315 add.w #1, r5                             cycles: 1
+
+	pops
+
+0xc106: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	INEXT
+
+0xc108: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   C@	( b -- c )
+;	Push byte memory location to the data stack.
+	.dw	CSTOR-4
+	.db 2,"C@",0
+CAT:
+	mov.b	@tos,tos
+
+0xc110: 0x4464 mov.b @r4, r4                            cycles: 2
+
+	INEXT
+
+0xc112: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   RP!	( -- )
+;	init return stack pointer.
+;	.dw	CAT-4
+;	.db 3,"RP!"
+RPSTO:
+	mov	#RPP,SP	;init return stack
+
+0xc114: 0x4031 mov.w #0x03f8, SP                        cycles: 2
+0xc116: 0x03f8
+
+	INEXT
+
+0xc118: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   R>	( -- w )
+;	Pop the return stack to the data stack.
+	.dw	CAT-4
+	.db 2,"R",3EH,0
+RFROM:
+	pushs
+
+0xc120: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc122: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc124: 0x0000
+
+	pop	tos
+
+0xc126: 0x4134 pop.w r4   --  mov.w @SP+, r4            cycles: 2
+
+	INEXT
+
+0xc128: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   R@	( -- w )
+;	Copy top of return stack to the data stack.
+	.dw	RFROM-4
+	.db 2,"R@",0
+RAT:
+	pushs
+
+0xc130: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc132: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc134: 0x0000
+
+	mov	0(sp),tos
+
+0xc136: 0x4114 mov.w 0(SP), r4                          cycles: 3
+0xc138: 0x0000
+
+	INEXT
+
+0xc13a: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   >R	( w -- )
+;	Push the data stack to the return stack.
+	.dw	RAT-4
+	.db COMPO+2,">R",0
+TOR:
+	push	tos
+
+0xc142: 0x1204 push.w r4                                cycles: 3
+
+	pops
+
+0xc144: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	INEXT
+
+0xc146: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   SP!	( -- )
+;	Init data stack pointer.
+;	.dw	SPAT-4
+;	.db 3,"SP!"
+SPSTO:
+	mov	#SPP,stack	;init parameter stack
+
+0xc148: 0x4035 mov.w #0x0378, r5                        cycles: 2
+0xc14a: 0x0378
+
+	clr	tos
+
+0xc14c: 0x4304 mov.w #0, r4                             cycles: 1
+
+	INEXT
+
+0xc14e: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   DROP	( w -- )
+;	Discard top stack item.
+	.dw	TOR-4
+	.db 4,"DROP",0
+DROP:
+	pops
+
+0xc158: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	INEXT
+
+0xc15a: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   DUP	( w -- w w )
+;	Duplicate the top stack item.
+	.dw	DROP-6
+	.db 3,"DUP"
+DUPP:
+	pushs
+
+0xc162: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc164: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc166: 0x0000
+
+	INEXT
+
+0xc168: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   SWAP	( w1 w2 -- w2 w1 )
+;	Exchange top two stack items.
+	.dw	DUPP-4
+	.db 4,"SWAP",0
+SWAP:
+	mov.w	tos,temp0
+
+0xc172: 0x4407 mov.w r4, r7                             cycles: 1
+
+	mov.w	@stack,tos
+
+0xc174: 0x4524 mov.w @r5, r4                            cycles: 2
+
+	mov.w	temp0,0(stack)
+
+0xc176: 0x4785 mov.w r7, 0(r5)                          cycles: 4
+0xc178: 0x0000
+
+	INEXT
+
+0xc17a: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   OVER	( w1 w2 -- w1 w2 w1 )
+;	Copy second stack item to top.
+	.dw	SWAP-6
+	.db 4,"OVER",0
+OVER:
+	mov.w	@stack,temp0
+
+0xc184: 0x4527 mov.w @r5, r7                            cycles: 2
+
+	pushs
+
+0xc186: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc188: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc18a: 0x0000
+
+	mov.w	temp0,tos
+
+0xc18c: 0x4704 mov.w r7, r4                             cycles: 1
+
+	INEXT
+
+0xc18e: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   0<	( n -- t )
+;	Return true if n is negative.
+	.dw	OVER-6
+	.db 2,"0",3CH,0
+ZLESS:
+	tst	tos
+
+0xc196: 0x9304 cmp.w #0, r4                             cycles: 1
+
+	jn	TRUE
+
+0xc198: 0x3002 jn 0xc19e  (offset: 4)                   cycles: 2
+
+FALSE:
+	clr	tos
+
+0xc19a: 0x4304 mov.w #0, r4                             cycles: 1
+
+	INEXT
+
+0xc19c: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+TRUE:
+	mov	#0x-1,tos
+
+0xc19e: 0x4334 mov.w #-1, r4                            cycles: 1
+
+	INEXT
+
+0xc1a0: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   AND	( w w -- w )
+;	Bitwise AND.
+	.dw	ZLESS-4
+	.db 3,"AND"
+ANDD:
+	and	@stack+,tos
+
+0xc1a8: 0xf534 and.w @r5+, r4                           cycles: 2
+
+	INEXT
+
+0xc1aa: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   OR	( w w -- w )
+;	Bitwise inclusive OR.
+	.dw	ANDD-4
+	.db 2,"OR",0
+ORR:
+	bis	@stack+,tos
+
+0xc1b2: 0xd534 bis.w @r5+, r4                           cycles: 2
+
+	INEXT
+
+0xc1b4: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   XOR	( w w -- w )
+;	Bitwise exclusive OR.
+	.dw	ORR-4
+	.db 3,"XOR"
+XORR:
+	xor	@stack+,tos
+
+0xc1bc: 0xe534 xor.w @r5+, r4                           cycles: 2
+
+	INEXT
+
+0xc1be: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   UM+	( w w -- w cy )
+;	Add two numbers, return the sum and carry flag.
+	.dw	XORR-4
+	.db 3,"UM+"
+UPLUS:
+	add	@stack,tos
+
+0xc1c6: 0x5524 add.w @r5, r4                            cycles: 2
+
+	mov	tos,0(stack)
+
+0xc1c8: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc1ca: 0x0000
+
+	clr	tos
+
+0xc1cc: 0x4304 mov.w #0, r4                             cycles: 1
+
+	rlc	tos
+
+0xc1ce: 0x6404 addc.w r4, r4                            cycles: 1
+
+	INEXT
+
+0xc1d0: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;; Common functions
+
+;   ?DUP	( w -- w w | 0 )
+;	Dup tos if its is not zero.
+	.dw	UPLUS-4
+	.db 4,"?DUP",0
+QDUP:
+	tst	tos
+
+0xc1da: 0x9304 cmp.w #0, r4                             cycles: 1
+
+	jnz	DUPP
+
+0xc1dc: 0x23c2 jne 0xc162  (offset: -124)               cycles: 2
+
+	INEXT
+
+0xc1de: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   ROT	( w1 w2 w3 -- w2 w3 w1 )
+;	Rot 3rd item to top.
+	.dw	QDUP-6
+	.db 3,"ROT"
+ROT:
+	mov.w	0(stack),temp0
+
+0xc1e6: 0x4517 mov.w 0(r5), r7                          cycles: 3
+0xc1e8: 0x0000
+
+	mov.w	tos,0(stack)
+
+0xc1ea: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc1ec: 0x0000
+
+	mov.w	2(stack),tos
+
+0xc1ee: 0x4514 mov.w 2(r5), r4                          cycles: 3
+0xc1f0: 0x0002
+
+	mov.w	temp0,2(stack)
+
+0xc1f2: 0x4785 mov.w r7, 2(r5)                          cycles: 4
+0xc1f4: 0x0002
+
+	INEXT
+
+0xc1f6: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   2DROP	( w w -- )
+;	Discard two items on stack.
+	.dw	ROT-4
+	.db 5,"2DROP"
+DDROP:
+	incd.w	stack
+
+0xc200: 0x5325 add.w #2, r5                             cycles: 1
+
+	pops
+
+0xc202: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	INEXT
+
+0xc204: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   2DUP	( w1 w2 -- w1 w2 w1 w2 )
+;	Duplicate top two items.
+	.dw	DDROP-6
+	.db 4,"2DUP",0
+DDUP:
+	mov.w	@stack,temp0
+
+0xc20e: 0x4527 mov.w @r5, r7                            cycles: 2
+
+	pushs
+
+0xc210: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc212: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc214: 0x0000
+
+	decd.w	stack
+
+0xc216: 0x8325 sub.w #2, r5                             cycles: 1
+
+	mov.w	temp0,0(stack)
+
+0xc218: 0x4785 mov.w r7, 0(r5)                          cycles: 4
+0xc21a: 0x0000
+
+	INEXT
+
+0xc21c: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   +	( w w -- sum )
+;	Add top two items.
+	.dw	DDUP-6
+	.db 1,"+"
+PLUS:
+	add	@stack+,tos
+
+0xc222: 0x5534 add.w @r5+, r4                           cycles: 2
+
+	INEXT
+
+0xc224: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   D+	( d d -- d )
+;	Double addition, as an example using UM+.
+;
+	.dw	PLUS-2
+	.db 2,"D+",0
+DPLUS:
+	mov.w	@stack+,temp0
+
+0xc22c: 0x4537 mov.w @r5+, r7                           cycles: 2
+
+	mov.w	@stack+,temp1
+
+0xc22e: 0x4538 mov.w @r5+, r8                           cycles: 2
+
+	add.w	temp0,0(stack)
+
+0xc230: 0x5785 add.w r7, 0(r5)                          cycles: 4
+0xc232: 0x0000
+
+	addc	temp1,tos
+
+0xc234: 0x6804 addc.w r8, r4                            cycles: 1
+
+	INEXT
+
+0xc236: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   NOT	( w -- w )
+;	One's complement of tos.
+	.dw	DPLUS-4
+	.db 3,"NOT"
+INVER:
+	inv	tos
+
+0xc23e: 0xe334 xor.w #-1, r4                            cycles: 1
+
+	INEXT
+
+0xc240: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   NEGATE	( n -- -n )
+;	Two's complement of tos.
+	.dw	INVER-4
+	.db 6,"NEGATE",0
+NEGAT:
+	inv	tos
+
+0xc24c: 0xe334 xor.w #-1, r4                            cycles: 1
+
+	inc	tos
+
+0xc24e: 0x5314 add.w #1, r4                             cycles: 1
+
+	INEXT
+
+0xc250: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   DNEGATE	( d -- -d )
+;	Two's complement of top double.
+	.dw	NEGAT-8
+	.db 7,"DNEGATE"
+DNEGA:
+	inv	tos
+
+0xc25c: 0xe334 xor.w #-1, r4                            cycles: 1
+
+	inv 0(stack)
+
+0xc25e: 0xe3b5 xor.w #-1, 0(r5)                         cycles: 4
+0xc260: 0x0000
+
+	inc	0(stack)
+
+0xc262: 0x5395 add.w #1, 0(r5)                          cycles: 4
+0xc264: 0x0000
+
+	addc	#0,tos
+
+0xc266: 0x6304 addc.w #0, r4                            cycles: 1
+
+	INEXT
+
+0xc268: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   -	( n1 n2 -- n1-n2 )
+;	Subtraction.
+	.dw	DNEGA-8
+	.db 1,"-"
+SUBB:
+	sub	@stack+,tos
+
+0xc26e: 0x8534 sub.w @r5+, r4                           cycles: 2
+
+	jmp	NEGAT
+
+0xc270: 0x3fed jmp 0xc24c  (offset: -38)                cycles: 2
+
+
+;   ABS	( n -- n )
+;	Return the absolute value of n.
+	.dw	SUBB-2
+	.db 3,"ABS"
+ABSS:
+	tst.w	tos
+
+0xc278: 0x9304 cmp.w #0, r4                             cycles: 1
+
+	jn	NEGAT
+
+0xc27a: 0x33e8 jn 0xc24c  (offset: -48)                 cycles: 2
+
+	INEXT
+
+0xc27c: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   =	( w w -- t )
+;	Return true if top two are equal.
+	.dw	ABSS-4
+	.db 1,3DH
+EQUAL:
+	xor	@stack+,tos
+
+0xc282: 0xe534 xor.w @r5+, r4                           cycles: 2
+
+	jnz	FALSE
+
+0xc284: 0x238a jne 0xc19a  (offset: -236)               cycles: 2
+
+	jmp	TRUE
+
+0xc286: 0x3f8b jmp 0xc19e  (offset: -234)               cycles: 2
+
+
+;   U<	( u u -- t )
+;	Unsigned compare of top two items.
+	.dw	EQUAL-2
+	.db 2,"U",3CH,0
+ULESS:
+	mov	@stack+,temp0
+
+0xc28e: 0x4537 mov.w @r5+, r7                           cycles: 2
+
+	cmp	tos,temp0
+
+0xc290: 0x9407 cmp.w r4, r7                             cycles: 1
+
+	subc	tos,tos
+
+0xc292: 0x7404 subc.w r4, r4                            cycles: 1
+
+	INEXT
+
+0xc294: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   <	( n1 n2 -- t )
+;	Signed compare of top two items.
+	.dw	ULESS-4
+	.db 1,3CH
+LESS:
+	cmp	@stack+,tos
+
+0xc29a: 0x9534 cmp.w @r5+, r4                           cycles: 2
+
+	jz	FALSE
+
+0xc29c: 0x277e jeq 0xc19a  (offset: -260)               cycles: 2
+
+	jge	TRUE
+
+0xc29e: 0x377f jge 0xc19e  (offset: -258)               cycles: 2
+
+	jmp	FALSE
+
+0xc2a0: 0x3f7c jmp 0xc19a  (offset: -264)               cycles: 2
+
+
+;   >	( n1 n2 -- t )
+;	Signed compare of top two items.
+	.dw	LESS-2
+	.db 1,3EH
+GREAT:
+	cmp	@stack+,tos
+
+0xc2a6: 0x9534 cmp.w @r5+, r4                           cycles: 2
+
+	jge	FALSE
+
+0xc2a8: 0x3778 jge 0xc19a  (offset: -272)               cycles: 2
+
+	jmp	TRUE
+
+0xc2aa: 0x3f79 jmp 0xc19e  (offset: -270)               cycles: 2
+
+
+;   MAX	( n n -- n )
+;	Return the greater of two top stack items.
+	.dw	GREAT-2
+	.db 3,"MAX"
+MAX:
+	cmp	0(stack),tos
+
+0xc2b2: 0x9514 cmp.w 0(r5), r4                          cycles: 3
+0xc2b4: 0x0000
+
+MAX1:
+	jl	DROP
+
+0xc2b6: 0x3b50 jl 0xc158  (offset: -352)                cycles: 2
+
+	incd.w	stack
+
+0xc2b8: 0x5325 add.w #2, r5                             cycles: 1
+
+	INEXT
+
+0xc2ba: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   MIN	( n n -- n )
+;	Return the smaller of top two stack items.
+	.dw	MAX-4
+	.db 3,"MIN"
+MIN:
+	cmp	tos,0(stack)
+
+0xc2c2: 0x9485 cmp.w r4, 0(r5)                          cycles: 4
+0xc2c4: 0x0000
+
+	jmp	MAX1
+
+0xc2c6: 0x3ff7 jmp 0xc2b6  (offset: -18)                cycles: 2
+
+
+;; Divide
+
+;   UM/MOD	( udl udh u -- ur uq )
+;	Unsigned divide of a double by a single. Return mod and quotient.
+	.dw	MIN-4
+	.db 6,"UM/MOD",0
+UMMOD:
+	mov	tos,temp0
+
+0xc2d2: 0x4407 mov.w r4, r7                             cycles: 1
+
+	pops
+
+0xc2d4: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	mov	#17,temp1
+
+0xc2d6: 0x4038 mov.w #0x0011, r8                        cycles: 2
+0xc2d8: 0x0011
+
+UMMOD2:
+	cmp	temp0,tos
+
+0xc2da: 0x9704 cmp.w r7, r4                             cycles: 1
+
+	jnc	UMMOD3
+
+0xc2dc: 0x2803 jlo 0xc2e4  (offset: 6)                  cycles: 2
+
+	sub	temp0,tos
+
+0xc2de: 0x8704 sub.w r7, r4                             cycles: 1
+
+	setc
+
+0xc2e0: 0xd312 setc  --  bis.w #1, SR                   cycles: 1
+
+	jmp	UMMOD4
+
+0xc2e2: 0x3c01 jmp 0xc2e6  (offset: 2)                  cycles: 2
+
+UMMOD3:
+	clrc
+
+0xc2e4: 0xc312 clrc  --  bic.w #1, SR                   cycles: 1
+
+UMMOD4:
+	rlc	0(stack)
+
+0xc2e6: 0x6595 addc.w 0(r5), 0(r5)                      cycles: 6
+0xc2e8: 0x0000
+0xc2ea: 0x0000
+
+	rlc	tos
+
+0xc2ec: 0x6404 addc.w r4, r4                            cycles: 1
+
+	dec	temp1
+
+0xc2ee: 0x8318 sub.w #1, r8                             cycles: 1
+
+	jnz	UMMOD2
+
+0xc2f0: 0x23f4 jne 0xc2da  (offset: -24)                cycles: 2
+
+	rra	tos
+
+0xc2f2: 0x1104 rra.w r4                                 cycles: 1
+
+	mov	tos,temp0
+
+0xc2f4: 0x4407 mov.w r4, r7                             cycles: 1
+
+	mov	0(stack),tos
+
+0xc2f6: 0x4514 mov.w 0(r5), r4                          cycles: 3
+0xc2f8: 0x0000
+
+	mov	temp0,0(stack)
+
+0xc2fa: 0x4785 mov.w r7, 0(r5)                          cycles: 4
+0xc2fc: 0x0000
+
+	INEXT
+
+0xc2fe: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   M/MOD	( d n -- r q )
+;	Signed floored divide of double by single. Return mod and quotient.
+	.dw	UMMOD-8
+	.db 5,"M/MOD"
+MSMOD:
+	INEST
+
+0xc308: 0x12b0 call #0xc098                             cycles: 5
+0xc30a: 0xc098
+
+	.dw	DUPP,ZLESS,DUPP,TOR,QBRAN,MMOD1
+	.dw	NEGAT,TOR,DNEGA,RFROM
+MMOD1:
+	.dw	TOR,DUPP,ZLESS,QBRAN,MMOD2
+	.dw	RAT,PLUS
+MMOD2:
+	.dw	RFROM,UMMOD,RFROM,QBRAN,MMOD3
+	.dw	SWAP,NEGAT,SWAP
+MMOD3:
+	.dw	EXIT
+
+;   /MOD	( n n -- r q )
+;	Signed divide. Return mod and quotient.
+	.dw	MSMOD-6
+	.db 4,"/MOD",0
+SLMOD:
+	INEST
+
+0xc348: 0x12b0 call #0xc098                             cycles: 5
+0xc34a: 0xc098
+
+	.dw	OVER,ZLESS,SWAP,MSMOD,EXIT
+
+;   MOD	( n n -- r )
+;	Signed divide. Return mod only.
+	.dw	SLMOD-6
+	.db 3,"MOD"
+MODD:
+	INEST
+
+0xc35c: 0x12b0 call #0xc098                             cycles: 5
+0xc35e: 0xc098
+
+	.dw	SLMOD,DROP,EXIT
+
+;   /	( n n -- q )
+;	Signed divide. Return quotient only.
+	.dw	MODD-4
+	.db 1,"/"
+SLASH:
+	INEST
+
+0xc36a: 0x12b0 call #0xc098                             cycles: 5
+0xc36c: 0xc098
+
+	.dw	SLMOD,SWAP,DROP,EXIT
+
+;; Multiply
+
+;   UM*	( u u -- ud )
+;	Unsigned multiply. Return double product.
+	.dw	SLASH-2
+	.db 3,"UM*"
+UMSTA:
+	clr	temp0
+
+0xc37c: 0x4307 mov.w #0, r7                             cycles: 1
+
+	mov	#16,temp1
+
+0xc37e: 0x4038 mov.w #0x0010, r8                        cycles: 2
+0xc380: 0x0010
+
+UMSTA2:
+	bit	#1,0(stack)
+
+0xc382: 0xb395 bit.w #1, 0(r5)                          cycles: 4
+0xc384: 0x0000
+
+	jz	UMSTA3
+
+0xc386: 0x2402 jeq 0xc38c  (offset: 4)                  cycles: 2
+
+	add	tos,temp0
+
+0xc388: 0x5407 add.w r4, r7                             cycles: 1
+
+	jmp	UMSTA4
+
+0xc38a: 0x3c01 jmp 0xc38e  (offset: 2)                  cycles: 2
+
+UMSTA3:
+	clrc
+
+0xc38c: 0xc312 clrc  --  bic.w #1, SR                   cycles: 1
+
+UMSTA4:
+	rrc	temp0
+
+0xc38e: 0x1007 rrc.w r7                                 cycles: 1
+
+	rrc	0(stack)
+
+0xc390: 0x1015 rrc.w 0(r5)                              cycles: 4
+0xc392: 0x0000
+
+	dec	temp1
+
+0xc394: 0x8318 sub.w #1, r8                             cycles: 1
+
+	jnz	UMSTA2
+
+0xc396: 0x23f5 jne 0xc382  (offset: -22)                cycles: 2
+
+	mov	temp0,tos
+
+0xc398: 0x4704 mov.w r7, r4                             cycles: 1
+
+	INEXT
+
+0xc39a: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   *	( n n -- n )
+;	Signed multiply. Return single product.
+	.dw	UMSTA-4
+	.db 1,"*"
+STAR:
+	INEST
+
+0xc3a0: 0x12b0 call #0xc098                             cycles: 5
+0xc3a2: 0xc098
+
+	.dw	UMSTA,DROP,EXIT
+
+;   M*	( n n -- d )
+;	Signed multiply. Return double product.
+	.dw	STAR-2
+	.db 2,"M*",0
+MSTAR:
+	INEST
+
+0xc3b0: 0x12b0 call #0xc098                             cycles: 5
+0xc3b2: 0xc098
+
+	.dw	DDUP,XORR,ZLESS,TOR
+	.dw	ABSS,SWAP,ABSS,UMSTA,RFROM
+	.dw	QBRAN,MSTA1
+	.dw	DNEGA
+MSTA1:
+	.dw	EXIT
+
+;   */MOD	( n1 n2 n3 -- r q )
+;	Multiply n1 and n2, then divide by n3. Return mod and quotient.
+	.dw	MSTAR-4
+	.db 5,"*/MOD"
+SSMOD:
+	INEST
+
+0xc3d6: 0x12b0 call #0xc098                             cycles: 5
+0xc3d8: 0xc098
+
+	.dw	TOR,MSTAR,RFROM,MSMOD,EXIT
+
+;   */	( n1 n2 n3 -- q )
+;	Multiply n1 by n2, then divide by n3. Return quotient only.
+	.dw	SSMOD-6
+	.db 2,"*/",0
+STASL:
+	INEST
+
+0xc3ea: 0x12b0 call #0xc098                             cycles: 5
+0xc3ec: 0xc098
+
+	.dw	SSMOD,SWAP,DROP,EXIT
+
+;; Miscellaneous
+
+;   1+	( a -- a+1 )
+;	Increment.
+;	.dw	STASL-4
+;	.db 2,"1+",0
+ONEP:
+	add	#1,tos
+
+0xc3f6: 0x5314 add.w #1, r4                             cycles: 1
+
+	INEXT
+
+0xc3f8: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   1-	( a -- a-1 )
+;	Decrement
+;	.dw	ONEP-4
+;	.db 2,"1-",0
+ONEM:
+	sub	#1,tos
+
+0xc3fa: 0x8314 sub.w #1, r4                             cycles: 1
+
+	INEXT
+
+0xc3fc: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   2+	( a -- a+2 )
+;	Add cell size in byte to address.
+;	.dw	ONEM-4
+;	.db 2,"2+",0
+CELLP:
+	add	#2,tos
+
+0xc3fe: 0x5324 add.w #2, r4                             cycles: 1
+
+	INEXT
+
+0xc400: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   2-	( a -- a-2 )
+;	Subtract cell size in byte from address.
+;	.dw	CELLP-4
+;	.db 2,"2-",0
+CELLM:
+	sub	#2,tos
+
+0xc402: 0x8324 sub.w #2, r4                             cycles: 1
+
+	INEXT
+
+0xc404: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   2*	( n -- 2*n )
+;	Multiply tos by cell size in bytes.
+	.dw	STASL-4
+	.db 2,"2*",0
+CELLS:
+	rla	tos
+
+0xc40c: 0x5404 add.w r4, r4                             cycles: 1
+
+	INEXT
+
+0xc40e: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   2/	( n -- n/2 )
+;	Divide tos by cell size in bytes.
+	.dw	CELLS-4
+	.db 2,"2/",0
+TWOSL:
+	rra	tos
+
+0xc416: 0x1104 rra.w r4                                 cycles: 1
+
+	INEXT
+
+0xc418: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   ALIGNED	( b -- a )
+;	Align address to the cell boundary.
+	.dw	TWOSL-4
+	.db 7,"ALIGNED"
+ALGND:
+	add	#1,tos
+
+0xc424: 0x5314 add.w #1, r4                             cycles: 1
+
+	bic	#1,tos
+
+0xc426: 0xc314 bic.w #1, r4                             cycles: 1
+
+	INEXT
+
+0xc428: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   >CHAR	( c -- c )
+;	Filter non-printing characters.
+;	.dw	TWOSL-4
+;	.db 5,">CHAR"
+TCHAR:
+	INEST
+
+0xc42a: 0x12b0 call #0xc098                             cycles: 5
+0xc42c: 0xc098
+
+	.dw	BLANK,MAX	;mask msb
+	.dw	DOLIT,126,MIN	;check for printable
+	.dw	EXIT
+
+;   DEPTH	( -- n )
+;	Return the depth of the data stack.
+;	.dw	TWOSL-4      ;MM180701
+  .dw ALGND-8      ;
+	.db 5,"DEPTH"
+DEPTH:
+	mov	stack,temp0
+
+0xc442: 0x4507 mov.w r5, r7                             cycles: 1
+
+	pushs
+
+0xc444: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc446: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc448: 0x0000
+
+	mov	#SPP,tos
+
+0xc44a: 0x4034 mov.w #0x0378, r4                        cycles: 2
+0xc44c: 0x0378
+
+	sub	temp0,tos
+
+0xc44e: 0x8704 sub.w r7, r4                             cycles: 1
+
+	rra	tos
+
+0xc450: 0x1104 rra.w r4                                 cycles: 1
+
+	INEXT
+
+0xc452: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   PICK	( ... +n -- ... w )
+;	Copy the nth stack item to tos.
+	.dw	DEPTH-6
+	.db 4,"PICK",0
+PICK:
+	rla	tos
+
+0xc45c: 0x5404 add.w r4, r4                             cycles: 1
+
+	add stack,tos
+
+0xc45e: 0x5504 add.w r5, r4                             cycles: 1
+
+	mov	@tos,tos
+
+0xc460: 0x4424 mov.w @r4, r4                            cycles: 2
+
+	INEXT
+
+0xc462: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;; Memory access
+
+;   +!	( n a -- )
+;	Add n to the contents at address a.
+	.dw	PICK-6
+	.db 2,"+!",0
+PSTOR:
+	add @stack+,0(tos)
+
+0xc46a: 0x55b4 add.w @r5+, 0(r4)                        cycles: 5
+0xc46c: 0x0000
+
+	pops
+
+0xc46e: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	INEXT
+
+0xc470: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   COUNT	( b -- b +n )
+;	Return count byte of a string and add 1 to byte address.
+	.dw	PSTOR-4
+	.db 5,"COUNT"
+COUNT:
+	mov.b	@tos+,temp0
+
+0xc47a: 0x4477 mov.b @r4+, r7                           cycles: 2
+
+	pushs
+
+0xc47c: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc47e: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc480: 0x0000
+
+	mov	temp0,tos
+
+0xc482: 0x4704 mov.w r7, r4                             cycles: 1
+
+	INEXT
+
+0xc484: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   CMOVE	( b1 b2 u -- )
+;	Copy u bytes from b1 to b2.
+	.dw	COUNT-6
+	.db 5,"CMOVE"
+CMOVE:
+	mov	@stack+,temp0	;destination
+
+0xc48e: 0x4537 mov.w @r5+, r7                           cycles: 2
+
+	mov	@stack+,temp1	;source
+
+0xc490: 0x4538 mov.w @r5+, r8                           cycles: 2
+
+	jmp	CMOVE2
+
+0xc492: 0x3c03 jmp 0xc49a  (offset: 6)                  cycles: 2
+
+CMOVE1:
+	mov.b	@temp1+,0(temp0)
+
+0xc494: 0x48f7 mov.b @r8+, 0(r7)                        cycles: 5
+0xc496: 0x0000
+
+	inc	temp0
+
+0xc498: 0x5317 add.w #1, r7                             cycles: 1
+
+CMOVE2:
+	dec	tos
+
+0xc49a: 0x8314 sub.w #1, r4                             cycles: 1
+
+	jn	CMOVE3	;I need a jp.  Oh, well.
+
+0xc49c: 0x3001 jn 0xc4a0  (offset: 2)                   cycles: 2
+
+	jmp	CMOVE1
+
+0xc49e: 0x3ffa jmp 0xc494  (offset: -12)                cycles: 2
+
+CMOVE3:
+	JMP	DROP
+
+0xc4a0: 0x3e5b jmp 0xc158  (offset: -842)               cycles: 2
+
+
+;   FILL	( b u c -- )
+;	Fill u bytes of character c to area beginning at b.
+	.dw	CMOVE-6
+	.db 4,"FILL",0
+FILL:
+	mov	@stack+,temp0	;count
+
+0xc4aa: 0x4537 mov.w @r5+, r7                           cycles: 2
+
+	mov	@stack+,temp1	;destination
+
+0xc4ac: 0x4538 mov.w @r5+, r8                           cycles: 2
+
+	jmp	FIL2
+
+0xc4ae: 0x3c03 jmp 0xc4b6  (offset: 6)                  cycles: 2
+
+FIL1:
+	mov.b	tos,0(temp1)
+
+0xc4b0: 0x44c8 mov.b r4, 0(r8)                          cycles: 4
+0xc4b2: 0x0000
+
+	inc	temp1
+
+0xc4b4: 0x5318 add.w #1, r8                             cycles: 1
+
+FIL2:
+	dec	temp0
+
+0xc4b6: 0x8317 sub.w #1, r7                             cycles: 1
+
+	jn	FIL3
+
+0xc4b8: 0x3001 jn 0xc4bc  (offset: 2)                   cycles: 2
+
+	jmp	FIL1
+
+0xc4ba: 0x3ffa jmp 0xc4b0  (offset: -12)                cycles: 2
+
+FIL3:
+	JMP	DROP
+
+0xc4bc: 0x3e4d jmp 0xc158  (offset: -870)               cycles: 2
+
+
+;; User variables
+
+;   'BOOT	( -- a )
+;	The application startup vector.
+	.dw	FILL-6
+	.db 5,"'BOOT"
+TBOOT:
+	ICONST
+
+0xc4c6: 0x12b0 call #0xc08c                             cycles: 5
+0xc4c8: 0xc08c
+
+	.dw	200H
+
+;   BASE	( -- a )
+;	Storage of the radix base for numeric I/O.
+	.dw	TBOOT-6
+	.db 4,"BASE",0
+BASE:
+	ICONST
+
+0xc4d4: 0x12b0 call #0xc08c                             cycles: 5
+0xc4d6: 0xc08c
+
+	.dw	202H
+
+;   tmp	( -- a )
+;	A temporary storage location used in parse and find.
+;	.dw	BASE-6
+;	.db COMPO+3,"tmp"
+TEMP:
+	ICONST
+
+0xc4da: 0x12b0 call #0xc08c                             cycles: 5
+0xc4dc: 0xc08c
+
+	.dw	204H
+
+;   #TIB	( -- a )
+;	Hold the character pointer while parsing input stream.
+;	.dw	BASE-6
+;	.db 4,"#TIB",0
+NTIB:
+	ICONST
+
+0xc4e0: 0x12b0 call #0xc08c                             cycles: 5
+0xc4e2: 0xc08c
+
+	.dw	206H
+
+;   >IN	( -- a )
+;	Hold the character pointer while parsing input stream.
+;	.dw	NTIB-6
+;	.db 3,">IN"
+INN:
+	ICONST
+
+0xc4e6: 0x12b0 call #0xc08c                             cycles: 5
+0xc4e8: 0xc08c
+
+	.dw	208H
+
+;   HLD	( -- a )
+;	Hold a pointer in building a numeric output string.
+;	.dw	INN-4
+;	.db 3,"HLD"
+HLD:
+	ICONST
+
+0xc4ec: 0x12b0 call #0xc08c                             cycles: 5
+0xc4ee: 0xc08c
+
+	.dw	20AH
+
+;   'EVAL	( -- a )
+;	A area to specify vocabulary search order.
+;	.dw	HLD-4
+;	.db 5,"'EVAL"
+TEVAL:
+	ICONST
+
+0xc4f2: 0x12b0 call #0xc08c                             cycles: 5
+0xc4f4: 0xc08c
+
+	.dw	20CH
+
+;   CONTEXT	( -- a )
+;	A area to specify vocabulary search order.
+;	.dw	TEVAL-6
+;	.db 7,"CONTEXT"
+CNTXT:
+	ICONST
+
+0xc4f8: 0x12b0 call #0xc08c                             cycles: 5
+0xc4fa: 0xc08c
+
+	.dw	20EH
+
+;   CP	( -- a )
+;	Point to the top of the code dictionary.
+	.dw	BASE-6
+	.db 2,"CP",0
+CP:
+	ICONST
+
+0xc504: 0x12b0 call #0xc08c                             cycles: 5
+0xc506: 0xc08c
+
+	.dw	210H
+
+;   DP	( -- a )
+;	Point to the bottom of the free ram area.
+	.dw	CP-4
+	.db 2,"DP",0
+DP:
+	ICONST
+
+0xc510: 0x12b0 call #0xc08c                             cycles: 5
+0xc512: 0xc08c
+
+	.dw	212H
+
+;   LAST	( -- a )
+;	Point to the last name in the name dictionary.
+;	.dw	DP-4
+;	.db 4,"LAST",0
+LAST:
+	ICONST
+
+0xc516: 0x12b0 call #0xc08c                             cycles: 5
+0xc518: 0xc08c
+
+	.dw	214H
+
+;   HERE	( -- a )
+;	Return the top of the code dictionary.
+	.dw	DP-4
+	.db 4,"HERE",0
+HERE:
+	INEST
+
+0xc524: 0x12b0 call #0xc098                             cycles: 5
+0xc526: 0xc098
+
+	.dw	DP,AT,EXIT
+
+;   PAD	( -- a )
+;	Return the address of a temporary buffer.
+	.dw	HERE-6
+	.db 3,"PAD"
+PAD:
+	INEST
+
+0xc534: 0x12b0 call #0xc098                             cycles: 5
+0xc536: 0xc098
+
+	.dw	HERE,DOLIT,80,PLUS,EXIT
+
+;   TIB	( -- a )
+;	Return the address of the terminal input buffer.
+	.dw	PAD-4
+	.db 3,"TIB"
+TIB:
+	ICONST
+
+0xc548: 0x12b0 call #0xc08c                             cycles: 5
+0xc54a: 0xc08c
+
+	.dw	TIBB
+
+;; Numeric output, single precision
+
+;   DIGIT	( u -- c )
+;	Convert digit u to a character.
+;	.dw	LAST-6
+;	.db 5,"DIGIT"
+DIGIT:
+	cmp	#10,tos
+
+0xc54e: 0x9034 cmp.w #0x000a, r4                        cycles: 2
+0xc550: 0x000a
+
+	jl	DIGIT1
+
+0xc552: 0x3802 jl 0xc558  (offset: 4)                   cycles: 2
+
+	add	#7,tos
+
+0xc554: 0x5034 add.w #0x0007, r4                        cycles: 2
+0xc556: 0x0007
+
+DIGIT1:
+	add	#"0",tos
+
+0xc558: 0x5034 add.w #0x0030, r4                        cycles: 2
+0xc55a: 0x0030
+
+	INEXT
+
+0xc55c: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   EXTRACT	( n base -- n c )
+;	Extract the least significant digit from n.
+;	.dw	DIGIT-6
+;	.db 7,"EXTRACT"
+EXTRC:
+	INEST
+
+0xc55e: 0x12b0 call #0xc098                             cycles: 5
+0xc560: 0xc098
+
+	.dw	DOLIT,0,SWAP,UMMOD
+	.dw	SWAP,DIGIT,EXIT
+
+;   <#	( -- )
+;	Initiate the numeric output process.
+	.dw	TIB-4
+	.db 2,"<#",0
+BDIGS:
+	INEST
+
+0xc576: 0x12b0 call #0xc098                             cycles: 5
+0xc578: 0xc098
+
+	.dw	PAD,HLD,STORE,EXIT
+
+;   HOLD	( c -- )
+;	Insert a character into the numeric output string.
+	.dw	BDIGS-4
+	.db 4,"HOLD",0
+HOLD:
+	INEST
+
+0xc58a: 0x12b0 call #0xc098                             cycles: 5
+0xc58c: 0xc098
+
+	.dw	HLD,AT,ONEM
+	.dw	DUPP,HLD,STORE,CSTOR,EXIT
+
+;   #	( u -- u )
+;	Extract one digit from u and append the digit to output string.
+	.dw	HOLD-6
+	.db 1,"#"
+DIG:
+	INEST
+
+0xc5a2: 0x12b0 call #0xc098                             cycles: 5
+0xc5a4: 0xc098
+
+	.dw	BASE,AT,EXTRC,HOLD,EXIT
+
+;   #S	( u -- 0 )
+;	Convert u until all digits are added to the output string.
+	.dw	DIG-2
+	.db 2,"#S",0
+DIGS:
+	INEST
+
+0xc5b6: 0x12b0 call #0xc098                             cycles: 5
+0xc5b8: 0xc098
+
+DIGS1:
+	.dw	DIG,DUPP,QBRAN,DIGS2
+	.dw	BRAN,DIGS1
+DIGS2:
+	.dw	EXIT
+
+;   SIGN	( n -- )
+;	Add a minus sign to the numeric output string.
+	.dw	DIGS-4
+	.db 4,"SIGN",0
+SIGN:
+	INEST
+
+0xc5d0: 0x12b0 call #0xc098                             cycles: 5
+0xc5d2: 0xc098
+
+	.dw	ZLESS,QBRAN,SIGN1
+	.dw	DOLIT,"-",HOLD
+SIGN1:
+	.dw	EXIT
+
+;   #>	( w -- b u )
+;	Prepare the output string to be TYPE'd.
+	.dw	SIGN-6
+	.db 2,"#",3EH,0
+EDIGS:
+	INEST
+
+0xc5e8: 0x12b0 call #0xc098                             cycles: 5
+0xc5ea: 0xc098
+
+	.dw	DROP,HLD,AT
+	.dw	PAD,OVER,SUBB,EXIT
+
+;   str	( n -- b u )
+;	Convert a signed integer to a numeric string.
+;	.dw	EDIGS-4
+;	.db 3,"str"
+STR:
+	INEST
+
+0xc5fa: 0x12b0 call #0xc098                             cycles: 5
+0xc5fc: 0xc098
+
+	.dw	DUPP,TOR,ABSS
+	.dw	BDIGS,DIGS,RFROM
+	.dw	SIGN,EDIGS,EXIT
+
+;   HEX	( -- )
+;	Use radix 16 as base for numeric conversions.
+	.dw	EDIGS-4
+	.db 3,"HEX"
+HEX:
+	mov	#16,&0x202
+
+0xc616: 0x40b2 mov.w #0x0010, &0x0202                   cycles: 5
+0xc618: 0x0010
+0xc61a: 0x0202
+
+	INEXT
+
+0xc61c: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   DECIMAL	( -- )
+;	Use radix 10 as base for numeric conversions.
+	.dw	HEX-4
+	.db 7,"DECIMAL"
+DECIM:
+	mov	#10,&0x202
+
+0xc628: 0x40b2 mov.w #0x000a, &0x0202                   cycles: 5
+0xc62a: 0x000a
+0xc62c: 0x0202
+
+	INEXT
+
+0xc62e: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;; Numeric input, single precision
+
+;   DIGIT?	( c base -- u t )
+;	Convert a character to its numeric value. A flag indicates success.
+;	.dw	DECIM-8
+;	.db 6,"DIGIT?",0
+DIGTQ:
+	mov	@stack,temp0
+
+0xc630: 0x4527 mov.w @r5, r7                            cycles: 2
+
+	sub	#"0",temp0
+
+0xc632: 0x8037 sub.w #0x0030, r7                        cycles: 2
+0xc634: 0x0030
+
+	jl	FALSE1
+
+0xc636: 0x380c jl 0xc650  (offset: 24)                  cycles: 2
+
+	cmp	#10,temp0
+
+0xc638: 0x9037 cmp.w #0x000a, r7                        cycles: 2
+0xc63a: 0x000a
+
+	jl	DIGTQ1
+
+0xc63c: 0x3805 jl 0xc648  (offset: 10)                  cycles: 2
+
+	sub	#7,temp0
+
+0xc63e: 0x8037 sub.w #0x0007, r7                        cycles: 2
+0xc640: 0x0007
+
+; -- bug fix MM-180628 --
+  cmp #10,temp0
+
+0xc642: 0x9037 cmp.w #0x000a, r7                        cycles: 2
+0xc644: 0x000a
+
+  jl FALSE1
+
+0xc646: 0x3804 jl 0xc650  (offset: 8)                   cycles: 2
+
+; -----------------------  
+DIGTQ1:
+	cmp	tos,temp0
+
+0xc648: 0x9407 cmp.w r4, r7                             cycles: 1
+
+	mov	temp0,0(stack)
+
+0xc64a: 0x4785 mov.w r7, 0(r5)                          cycles: 4
+0xc64c: 0x0000
+
+	jl	TRUE1
+
+0xc64e: 0x3802 jl 0xc654  (offset: 4)                   cycles: 2
+
+FALSE1:
+	clr	tos
+
+0xc650: 0x4304 mov.w #0, r4                             cycles: 1
+
+	INEXT
+
+0xc652: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+TRUE1:
+	mov	#-1,tos
+
+0xc654: 0x4334 mov.w #-1, r4                            cycles: 1
+
+	INEXT
+
+0xc656: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   NUMBER?	( a -- n T | a F )
+;	Convert a number string to integer. Push a flag on tos.
+	.dw	DECIM-8
+	.db 7,"NUMBER?"
+NUMBQ:
+	INEST
+
+0xc662: 0x12b0 call #0xc098                             cycles: 5
+0xc664: 0xc098
+
+	.dw	BASE,AT,TOR,DOLIT,0,OVER,COUNT
+	.dw	OVER,CAT,DOLIT,'$',EQUAL,QBRAN,NUMQ1
+	.dw	HEX,SWAP,ONEP,SWAP,ONEM
+NUMQ1:
+	.dw	OVER,CAT,DOLIT,'-',EQUAL,TOR
+	.dw	SWAP,RAT,SUBB,SWAP,RAT,PLUS,QDUP
+	.dw	QBRAN,NUMQ6
+	.dw	ONEM,TOR
+NUMQ2:
+	.dw	DUPP,TOR,CAT,BASE,AT,DIGTQ
+	.dw	QBRAN,NUMQ4
+	.dw	SWAP,BASE,AT,STAR,PLUS,RFROM,ONEP
+	.dw	DONXT,NUMQ2
+	.dw	RAT,SWAP,DROP,QBRAN,NUMQ3
+	.dw	NEGAT
+NUMQ3:
+	.dw	SWAP
+	.dw	BRAN,NUMQ5
+NUMQ4:
+	.dw	RFROM,RFROM,DDROP,DDROP,DOLIT,0
+NUMQ5:
+	.dw	DUPP
+NUMQ6:
+	.dw	RFROM,DDROP,RFROM,BASE,STORE,EXIT
+
+;; Terminal output
+
+;   BL	( -- 32 )
+;	Return 32, the blank character.
+	.dw	NUMBQ-8
+	.db 2,"BL",0
+BLANK:
+	ICONST
+
+0xc702: 0x12b0 call #0xc08c                             cycles: 5
+0xc704: 0xc08c
+
+	.dw	20H
+
+;   SPACE	( -- )
+;	Send the blank character to the output device.
+	.dw	BLANK-4
+	.db 5,"SPACE"
+SPACE:
+	INEST
+
+0xc710: 0x12b0 call #0xc098                             cycles: 5
+0xc712: 0xc098
+
+	.dw	BLANK,EMIT,EXIT
+
+;   SPACES	( +n -- )
+;	Send n spaces to the output device.
+	.dw	SPACE-6
+	.db 6,"SPACES",0
+SPACS:
+	INEST
+
+0xc724: 0x12b0 call #0xc098                             cycles: 5
+0xc726: 0xc098
+
+	.dw	DOLIT,0,MAX,TOR,BRAN,CHAR2
+CHAR1:
+	.dw	SPACE
+CHAR2:
+	.dw	DONXT,CHAR1,EXIT
+
+;   TYPE	( b u -- )
+;	Output u characters from b.
+	.dw	SPACS-8
+	.db 4,"TYPE",0
+TYPEE:
+	INEST
+
+0xc744: 0x12b0 call #0xc098                             cycles: 5
+0xc746: 0xc098
+
+	.dw	TOR,BRAN,TYPE2
+TYPE1:
+	.dw	DUPP,CAT,TCHAR,EMIT
+	.dw	ONEP
+TYPE2:
+	.dw	DONXT,TYPE1
+	.dw	DROP,EXIT
+
+;   CR	( -- )
+;	Output a carriage return and a line feed.
+	.dw	TYPEE-6
+	.db 2,"CR",0
+CR:
+	INEST
+
+0xc766: 0x12b0 call #0xc098                             cycles: 5
+0xc768: 0xc098
+
+	.dw	DOLIT,CRR,EMIT
+	.dw	DOLIT,LF,EMIT,EXIT
+
+;   do$	( -- a )
+;	Return the address of a compiled string.
+;	.dw	CR-4
+;	.db COMPO+3,"do$"
+DOSTR:
+	INEST
+
+0xc778: 0x12b0 call #0xc098                             cycles: 5
+0xc77a: 0xc098
+
+	.dw	RFROM,RAT,RFROM,COUNT,PLUS
+	.dw	ALGND,TOR,SWAP,TOR,EXIT
+
+;   $"|	( -- a )
+;	Run time routine compiled by $". Return address of a compiled string.
+;	.dw	CR-4
+;	.db COMPO+3,"$""|"
+STRQP:
+	INEST
+
+0xc790: 0x12b0 call #0xc098                             cycles: 5
+0xc792: 0xc098
+
+	.dw	DOSTR,EXIT	;force a call to do$
+
+;   ."|	( -- )
+;	Run time routine of ." . Output a compiled string.
+;	.dw	STRQP-4
+;	.db COMPO+3,".""|"
+DOTQP:
+	INEST
+
+0xc798: 0x12b0 call #0xc098                             cycles: 5
+0xc79a: 0xc098
+
+	.dw	DOSTR,COUNT,TYPEE,EXIT
+
+;   .R	( n +n -- )
+;	Display an integer in a field of n columns, right justified.
+	.dw	CR-4
+	.db 2,".R",0
+DOTR:
+	INEST
+
+0xc7aa: 0x12b0 call #0xc098                             cycles: 5
+0xc7ac: 0xc098
+
+	.dw	TOR,STR,RFROM,OVER,SUBB
+	.dw	SPACS,TYPEE,EXIT
+
+;   U.R	( u +n -- )
+;	Display an unsigned integer in n column, right justified.
+	.dw	DOTR-4
+	.db 3,"U.R"
+UDOTR:
+	INEST
+
+0xc7c4: 0x12b0 call #0xc098                             cycles: 5
+0xc7c6: 0xc098
+
+	.dw	TOR,BDIGS,DIGS,EDIGS
+	.dw	RFROM,OVER,SUBB,SPACS,TYPEE,EXIT
+
+;   U.	( u -- )
+;	Display an unsigned integer in free format.
+	.dw	UDOTR-4
+	.db 2,"U.",0
+UDOT:
+	INEST
+
+0xc7e2: 0x12b0 call #0xc098                             cycles: 5
+0xc7e4: 0xc098
+
+	.dw	BDIGS,DIGS,EDIGS,SPACE,TYPEE,EXIT
+
+;   .	( w -- )
+;	Display an integer in free format, preceeded by a space.
+	.dw	UDOT-4
+	.db 1,"."
+DOT:
+	INEST
+
+0xc7f6: 0x12b0 call #0xc098                             cycles: 5
+0xc7f8: 0xc098
+
+	.dw	BASE,AT,DOLIT,10,XORR	;?decimal
+	.dw	QBRAN,DOT1
+	.dw	UDOT,EXIT	;no, display unsigned
+DOT1:	.dw	STR,SPACE,TYPEE,EXIT	;yes, display signed
+
+;   ?	( a -- )
+;	Display the contents in a memory cell.
+	.dw	DOT-2
+	.db 1,"?"
+QUEST:
+	INEST
+
+0xc818: 0x12b0 call #0xc098                             cycles: 5
+0xc81a: 0xc098
+
+	.dw	AT,DOT,EXIT
+
+;; Parsing
+
+;   parse	( b u c -- b u delta ; <string> )
+;	Scan string delimited by c. Return found string and its offset.
+;	.dw	QUEST-2
+;	.db 5,"parse"
+PARS:
+	INEST
+
+0xc822: 0x12b0 call #0xc098                             cycles: 5
+0xc824: 0xc098
+
+	.dw	TEMP,STORE,OVER,TOR,DUPP,QBRAN,PARS8
+	.dw	ONEM,TEMP,AT,BLANK,EQUAL,QBRAN,PARS3
+	.dw	TOR
+PARS1:
+	.dw	BLANK,OVER,CAT	;skip leading blanks ONLY
+	.dw	SUBB,ZLESS,INVER,QBRAN,PARS2
+	.dw	ONEP,DONXT,PARS1
+	.dw	RFROM,DROP,DOLIT,0,DUPP,EXIT
+PARS2:
+	.dw	RFROM
+PARS3:
+	.dw	OVER,SWAP,TOR
+PARS4:
+	.dw	TEMP,AT,OVER,CAT,SUBB	;scan for delimiter
+	.dw	TEMP,AT,BLANK,EQUAL,QBRAN,PARS5
+	.dw	ZLESS
+PARS5:
+	.dw	QBRAN,PARS6
+	.dw	ONEP,DONXT,PARS4
+	.dw	DUPP,TOR,BRAN,PARS7
+PARS6:
+	.dw	RFROM,DROP,DUPP,ONEP,TOR
+PARS7:
+	.dw	OVER,SUBB,RFROM,RFROM,SUBB,EXIT
+PARS8:
+	.dw	OVER,RFROM,SUBB,EXIT
+
+;   PARSE	( c -- b u ; <string> )
+;	Scan input stream and return counted string delimited by c.
+;	.dw	QUEST-2
+;	.db 5,"PARSE"
+PARSE:
+	INEST
+
+0xc8b6: 0x12b0 call #0xc098                             cycles: 5
+0xc8b8: 0xc098
+
+	.dw	TOR,TIB,INN,AT,PLUS	;current input buffer pointer
+	.dw	NTIB,AT,INN,AT,SUBB	;remaining count
+	.dw	RFROM,PARS,INN,PSTOR,EXIT
+
+;   .(	( -- )
+;	Output following string up to next ) .
+	.dw	QUEST-2
+	.db IMEDD+2,".(",0
+DOTPR:
+	INEST
+
+0xc8de: 0x12b0 call #0xc098                             cycles: 5
+0xc8e0: 0xc098
+
+	.dw	DOLIT,")",PARSE,TYPEE,EXIT
+
+;   (	( -- )
+;	Ignore following string up to next ) . A comment.
+	.dw	DOTPR-4
+	.db IMEDD+1,"("
+PAREN:
+	INEST
+
+0xc8f0: 0x12b0 call #0xc098                             cycles: 5
+0xc8f2: 0xc098
+
+	.dw	DOLIT,")",PARSE,DDROP,EXIT
+
+;   \	( -- )
+;	Ignore following text till the end of line.
+	.dw	PAREN-2
+	.db IMEDD+1
+    .db 5Ch ; CC: "\" ; naken: [char] \    ;mk
+BKSLA:
+	INEST
+
+0xc902: 0x12b0 call #0xc098                             cycles: 5
+0xc904: 0xc098
+
+	.dw	NTIB,AT,INN,STORE,EXIT
+
+;   CHAR	( -- c )
+;	Parse next word and return its first character.
+	.dw	BKSLA-2
+	.db 4,"CHAR",0
+CHAR:
+	INEST
+
+0xc918: 0x12b0 call #0xc098                             cycles: 5
+0xc91a: 0xc098
+
+	.dw	BLANK,PARSE,DROP,CAT,EXIT
+
+;   TOKEN	( -- a ; <string> )
+;	Parse a word from input stream and copy it to name dictionary.
+	.dw	CHAR-6
+	.db 5,"TOKEN"
+TOKEN:
+	INEST
+
+0xc92e: 0x12b0 call #0xc098                             cycles: 5
+0xc930: 0xc098
+
+	.dw	BLANK,PARSE,DOLIT,31,MIN
+TOKEN1:
+	.dw	HERE,DDUP,CSTOR,ONEP
+	.dw	SWAP,CMOVE,HERE
+	.dw	DOLIT,0,HERE,COUNT,PLUS,CSTOR,EXIT
+
+;   WORD	( c -- a ; <string> )
+;	Parse a word from input stream and copy it to code dictionary.
+	.dw	TOKEN-6
+	.db 4,"WORD",0
+WORDD:
+	INEST
+
+0xc960: 0x12b0 call #0xc098                             cycles: 5
+0xc962: 0xc098
+
+	.dw	PARSE,BRAN,TOKEN1
+
+;; Dictionary search
+
+;   NAME>	( na -- ca )
+;	Return a code address given a name address.
+;	.dw	WORDD-6
+;	.db 5,"NAME>"
+NAMET:
+	mov.b	@tos+,temp0
+
+0xc96a: 0x4477 mov.b @r4+, r7                           cycles: 2
+
+	and	#0x1F,temp0
+
+0xc96c: 0xf037 and.w #0x001f, r7                        cycles: 2
+0xc96e: 0x001f
+
+	add	temp0,tos
+
+0xc970: 0x5704 add.w r7, r4                             cycles: 1
+
+	inc	tos
+
+0xc972: 0x5314 add.w #1, r4                             cycles: 1
+
+	bic	#1,tos
+
+0xc974: 0xc314 bic.w #1, r4                             cycles: 1
+
+	INEXT
+
+0xc976: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   SAME?	( a a -- a a f \ -0+ )
+;	Compare u cells in two strings. Return 0 if identical.
+;	.dw	NAMET-6
+;	.db 5,"SAME?"
+SAMEQ:
+	pushs
+
+0xc978: 0x8325 sub.w #2, r5                             cycles: 1
+
+
+0xc97a: 0x4485 mov.w r4, 0(r5)                          cycles: 4
+0xc97c: 0x0000
+
+	mov	2(stack),tos
+
+0xc97e: 0x4514 mov.w 2(r5), r4                          cycles: 3
+0xc980: 0x0002
+
+	mov.b	@tos,tos
+
+0xc982: 0x4464 mov.b @r4, r4                            cycles: 2
+
+SAME1:
+	mov	2(stack),temp0
+
+0xc984: 0x4517 mov.w 2(r5), r7                          cycles: 3
+0xc986: 0x0002
+
+	add	tos,temp0
+
+0xc988: 0x5407 add.w r4, r7                             cycles: 1
+
+	mov.b	0(temp0),temp0
+
+0xc98a: 0x4757 mov.b 0(r7), r7                          cycles: 3
+0xc98c: 0x0000
+
+	mov	0(stack),temp1
+
+0xc98e: 0x4518 mov.w 0(r5), r8                          cycles: 3
+0xc990: 0x0000
+
+	add	tos,temp1
+
+0xc992: 0x5408 add.w r4, r8                             cycles: 1
+
+	mov.b	0(temp1),temp1
+
+0xc994: 0x4858 mov.b 0(r8), r8                          cycles: 3
+0xc996: 0x0000
+
+	sub	temp1,temp0
+
+0xc998: 0x8807 sub.w r8, r7                             cycles: 1
+
+	jnz	SAME2
+
+0xc99a: 0x2003 jne 0xc9a2  (offset: 6)                  cycles: 2
+
+	dec	tos
+
+0xc99c: 0x8314 sub.w #1, r4                             cycles: 1
+
+	jnz	SAME1
+
+0xc99e: 0x23f2 jne 0xc984  (offset: -28)                cycles: 2
+
+	INEXT
+
+0xc9a0: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+SAME2:
+	jmp TRUE1
+
+0xc9a2: 0x3e58 jmp 0xc654  (offset: -848)               cycles: 2
+
+
+;   NAME?	( a -- ca na | a F )
+;	Search all context vocabularies for a string.
+;	.dw	WORDD-6
+;	.db 5,"NAME?"
+NAMEQ:
+	INEST
+
+0xc9a4: 0x12b0 call #0xc098                             cycles: 5
+0xc9a6: 0xc098
+
+	.dw	CNTXT,AT
+FIND1:
+	.dw	DUPP,QBRAN,FIND3	;end of dictionary
+	.dw	OVER,AT,OVER,AT,DOLIT,MASKK,ANDD,EQUAL
+	.dw	QBRAN,FIND4
+	.dw	SAMEQ,QBRAN,FIND2	;match
+FIND4:
+	.dw	CELLM,AT,BRAN,FIND1
+FIND2:
+	.dw	SWAP,DROP,DUPP,NAMET,SWAP,EXIT
+FIND3:
+	.dw	EXIT
+
+;; Terminal input
+
+;   ^H	( bot eot cur -- bot eot cur )
+;	Backup the cursor by one character.
+;	.dw	NAMEQ-6
+;	.db 2,"^H",0
+BKSP:
+	INEST
+
+0xc9e2: 0x12b0 call #0xc098                             cycles: 5
+0xc9e4: 0xc098
+
+	.dw	TOR,OVER,RFROM,SWAP,OVER,XORR
+	.dw	QBRAN,BACK1
+	.dw	DOLIT,BKSPP,EMIT,ONEM
+	.dw	BLANK,EMIT,DOLIT,BKSPP,EMIT
+BACK1:
+	.dw	EXIT
+
+;   TAP	( bot eot cur c -- bot eot cur )
+;	Accept and echo the key stroke and bump the cursor.
+;	.dw	BKSP-4
+;	.db 3,"TAP"
+TAP:
+	INEST
+
+0xca0a: 0x12b0 call #0xc098                             cycles: 5
+0xca0c: 0xc098
+
+	.dw	DUPP,EMIT,OVER,CSTOR,ONEP,EXIT
+
+;   kTAP	( bot eot cur c -- bot eot cur )
+;	Process a key stroke, CR or backspace.
+;	.dw	TAP-4
+;	.db 4,"kTAP",0
+KTAP:
+	INEST
+
+0xca1a: 0x12b0 call #0xc098                             cycles: 5
+0xca1c: 0xc098
+
+	.dw	DUPP,DOLIT,CRR,XORR,QBRAN,KTAP2
+	.dw	DOLIT,BKSPP,XORR,QBRAN,KTAP1
+	.dw	BLANK,TAP,EXIT
+KTAP1:
+	.dw	BKSP,EXIT
+KTAP2:
+	.dw	DROP,SWAP,DROP,DUPP,EXIT
+
+;   accept	( b u -- b u )
+;	Accept characters to input buffer. Return with actual count.
+	.dw	WORDD-6
+	.db 6,"ACCEPT",0
+ACCEP:
+	INEST
+
+0xca52: 0x12b0 call #0xc098                             cycles: 5
+0xca54: 0xc098
+
+	.dw	OVER,PLUS,OVER
+ACCP1:
+	.dw	DDUP,XORR,QBRAN,ACCP4
+	.dw	KEY,DUPP,BLANK,SUBB,DOLIT,95,ULESS
+	.dw	QBRAN,ACCP2
+	.dw	TAP,BRAN,ACCP1
+ACCP2:
+	.dw	KTAP
+ACCP3:
+	.dw	BRAN,ACCP1
+ACCP4:
+	.dw	DROP,OVER,SUBB,EXIT
+
+;   QUERY	( -- )
+;	Accept input stream to terminal input buffer.
+	.dw	ACCEP-8
+	.db 5,"QUERY"
+QUERY:
+	INEST
+
+0xca92: 0x12b0 call #0xc098                             cycles: 5
+0xca94: 0xc098
+
+	.dw	TIB,DOLIT,80,ACCEP,NTIB,STORE
+	.dw	DROP,DOLIT,0,INN,STORE,EXIT
+
+;; Error handling
+
+; QUIT inits return stack. ERROR inits both stacks.
+
+;   ERROR	( a -- )
+;	Return address of a null string with zero count.
+;	.dw	QUERY-6
+;	.db 5,"ERROR"
+ERROR:
+	INEST
+
+0xcaae: 0x12b0 call #0xc098                             cycles: 5
+0xcab0: 0xc098
+
+	.dw	SPACE,COUNT,TYPEE,DOLIT
+	.dw	3FH,EMIT,CR,SPSTO,QUIT
+
+
+;   abort"	( f -- )
+;	Run time routine of ABORT" . Abort with a message.
+;	.dw	ERROR-6
+;	.db COMPO+6,"abort""",0
+ABORQ:
+	INEST
+
+0xcac4: 0x12b0 call #0xc098                             cycles: 5
+0xcac6: 0xc098
+
+	.dw	QBRAN,ABOR1	;text flag
+	.dw	DOSTR,COUNT,TYPEE,SPSTO,QUIT	;pass error string
+ABOR1:
+	.dw	DOSTR,DROP,EXIT
+
+;; Text interpreter
+
+;   $INTERPRET	( a -- )
+;	Interpret a word. If failed, try to convert it to an integer.
+;	.dw	ERROR-6
+;	.db 10,"$INTERPRET",0
+INTER:
+	INEST
+
+0xcadc: 0x12b0 call #0xc098                             cycles: 5
+0xcade: 0xc098
+
+	.dw	NAMEQ,QDUP	;?defined
+	.dw	QBRAN,INTE1
+	.dw	AT,DOLIT,COMPO,ANDD	;?compile only lexicon bits
+	.dw	ABORQ
+	.db 13," compile only"
+	.dw	EXECU,EXIT	;execute defined word
+INTE1:
+	.dw	NUMBQ	;convert a number
+	.dw	QBRAN,INTE2,EXIT
+INTE2:
+	.dw	ERROR	;error
+
+;   [	( -- )
+;	Start the text interpreter.
+	.dw	QUERY-6
+	.db IMEDD+1,"["
+LBRAC:
+	INEST
+
+0xcb12: 0x12b0 call #0xc098                             cycles: 5
+0xcb14: 0xc098
+
+	.dw	DOLIT,INTER,TEVAL,STORE,EXIT
+
+;   .OK	( -- )
+;	Display 'ok' only while interpreting.
+;	.dw	LBRAC-2
+;	.db 3,".OK"
+DOTOK:
+	INEST
+
+0xcb20: 0x12b0 call #0xc098                             cycles: 5
+0xcb22: 0xc098
+
+	.dw	DOLIT,INTER,TEVAL,AT,EQUAL
+	.dw	QBRAN,DOTO1
+	.dw	DOTQP
+	.db 3," ok"
+DOTO1:	.dw	CR,EXIT
+
+
+;   ?STACK	( -- )
+;	Abort if the data stack underflows.
+;	.dw	DOTOK-4
+;	.db 6,"?STACK",0
+QSTAC:
+	INEST
+
+0xcb3c: 0x12b0 call #0xc098                             cycles: 5
+0xcb3e: 0xc098
+
+	.dw	DEPTH,ZLESS	;check only for underflow
+	.dw	ABORQ
+	.db 10," underflow",0
+	.dw	EXIT
+
+;   EVAL	( -- )
+;	Interpret the input stream.
+;	.dw	QSTAC-8
+;	.db 4,"EVAL",0
+EVAL:
+	INEST
+
+0xcb54: 0x12b0 call #0xc098                             cycles: 5
+0xcb56: 0xc098
+
+EVAL1:
+	.dw	TOKEN,DUPP,CAT	;?input stream empty
+	.dw	QBRAN,EVAL2
+	.dw	TEVAL,ATEXE,QSTAC	;evaluate input, check stack
+	.dw	BRAN,EVAL1
+EVAL2:
+	.dw	DROP,DOTOK,EXIT	;prompt
+
+;   QUIT	( -- )
+;	Reset return stack pointer and start text interpreter.
+	.dw	LBRAC-2
+	.db 4,"QUIT",0
+QUIT:
+	INEST
+
+0xcb7a: 0x12b0 call #0xc098                             cycles: 5
+0xcb7c: 0xc098
+
+	.dw	RPSTO,LBRAC	;start interpretation
+QUIT1:
+	.dw	QUERY,EVAL	;get input
+	.dw	BRAN,QUIT1	;continue till error
+
+;; Compiler utilities
+
+;   ALLOT	( n -- )
+;	Allocate n bytes to the RAM dictionary.
+	.dw	QUIT-6
+	.db 5,"ALLOT"
+ALLOT:
+	INEST
+
+0xcb92: 0x12b0 call #0xc098                             cycles: 5
+0xcb94: 0xc098
+
+	.dw	DP,PSTOR,EXIT	;adjust code pointer
+
+;   IALLOT	( n -- )
+;	Allocate n bytes to the code dictionary.
+	.dw	ALLOT-6
+	.db 6,"IALLOT",0
+IALLOT:
+	INEST
+
+0xcba6: 0x12b0 call #0xc098                             cycles: 5
+0xcba8: 0xc098
+
+	.dw	CP,PSTOR,EXIT	;adjust code pointer
+
+;   I!	( n a -- )
+;	Store n to address a in code dictionary.
+	.dw	IALLOT-8
+	.db 2,"I!",0
+ISTORE:
+	mov	#FWKEY,&FCTL3 ; Clear LOCK
+
+0xcbb6: 0x40b2 mov.w #0xa500, &0x012c                   cycles: 5
+0xcbb8: 0xa500
+0xcbba: 0x012c
+
+	mov	#FWKEY+WRT,&FCTL1 ; Enable write
+
+0xcbbc: 0x40b2 mov.w #0xa540, &0x0128                   cycles: 5
+0xcbbe: 0xa540
+0xcbc0: 0x0128
+
+;	call	#STORE
+	mov.w	@stack+,0(tos)
+
+0xcbc2: 0x45b4 mov.w @r5+, 0(r4)                        cycles: 5
+0xcbc4: 0x0000
+
+	pops
+
+0xcbc6: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	mov	#FWKEY,&FCTL1 ; Done. Clear WRT
+
+0xcbc8: 0x40b2 mov.w #0xa500, &0x0128                   cycles: 5
+0xcbca: 0xa500
+0xcbcc: 0x0128
+
+	mov	#FWKEY+LOCK,&FCTL3 ; Set LOCK
+
+0xcbce: 0x40b2 mov.w #0xa510, &0x012c                   cycles: 5
+0xcbd0: 0xa510
+0xcbd2: 0x012c
+
+	INEXT
+
+0xcbd4: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;--------------------------------------- ; MM-180707
+; ?I! ( n a -- )
+;	Store n to address a in code dictionary.
+; Abort if user dictionary space is full.
+QISTOR:
+  INEST 
+0xcbd6: 0x12b0 call #0xc098                             cycles: 5
+0xcbd8: 0xc098
+
+
+  .dw QFLASH,ISTORE,EXIT
+; --------------------------------------
+
+;   IERASE	( a -- )
+;	Erase a segment at address a.
+	.dw	ISTORE-4
+;	.db 5,"ERASE"   MM-180630
+	.db 6,"IERASE",0
+IERASE:
+	mov	#FWKEY,&FCTL3 ; Clear LOCK
+
+0xcbea: 0x40b2 mov.w #0xa500, &0x012c                   cycles: 5
+0xcbec: 0xa500
+0xcbee: 0x012c
+
+	mov	#FWKEY+ERASE,&FCTL1 ; Enable erase
+
+0xcbf0: 0x40b2 mov.w #0xa502, &0x0128                   cycles: 5
+0xcbf2: 0xa502
+0xcbf4: 0x0128
+
+	clr	0(tos)
+
+0xcbf6: 0x4384 mov.w #0, 0(r4)                          cycles: 4
+0xcbf8: 0x0000
+
+	mov	#FWKEY+LOCK,&FCTL3 ; Set LOCK
+
+0xcbfa: 0x40b2 mov.w #0xa510, &0x012c                   cycles: 5
+0xcbfc: 0xa510
+0xcbfe: 0x012c
+
+	pops
+
+0xcc00: 0x4534 mov.w @r5+, r4                           cycles: 2
+
+	INEXT
+
+0xcc02: 0x4630 mov.w @r6+, PC                           cycles: 3
+
+
+;   IWRITE	( src dest n -- )
+;	Copy n byte from src to dest.  Dest is in flash memory.
+;	.dw	IERASE-6   MM-180630
+	.dw	IERASE-8
+;	.db 5,"WRITE"  MM-180630
+	.db 6,"IWRITE",0
+IWRITE:
+	INEST
+
+0xcc0e: 0x12b0 call #0xc098                             cycles: 5
+0xcc10: 0xc098
+
+	.dw	TWOSL,TOR
+IWRITE1:
+;	.dw	OVER,AT,OVER,ISTORE    ;MM-180707
+	.dw	OVER,AT,OVER,QISTOR    ;
+	.dw	CELLP,SWAP,CELLP,SWAP
+	.dw	DONXT,IWRITE1
+	.dw	DDROP,EXIT
+
+;   ,	( w -- )
+;	Compile an integer into the code dictionary.
+;	.dw	WRITE-6   MM-180630
+	.dw	IWRITE-8
+	.db 1,","
+COMMA:
+	INEST
+
+0xcc32: 0x12b0 call #0xc098                             cycles: 5
+0xcc34: 0xc098
+
+;	.dw	CP,AT,DUPP,CELLP	;cell boundary                     ;MM-180707
+	.dw	CP,AT,QFLASH,DUPP,CELLP	;cell boundary + flash test  ;
+	.dw	CP,STORE,ISTORE,EXIT
+
+;   call,	( w -- )
+;	Compile a call instruction into the code dictionary.
+;	.dw	COMMA-2
+;	.db 5,"call,"
+CALLC:
+	INEST
+
+0xcc48: 0x12b0 call #0xc098                             cycles: 5
+0xcc4a: 0xc098
+
+	.dw	DOLIT,CALLL,COMMA
+	.dw	COMMA,EXIT
+
+;   [COMPILE]	( -- ; <string> )
+;	Compile the next immediate word into code dictionary.
+;	.dw	COMMA-2
+;	.db IMEDD+9,"[COMPILE]"
+BCOMP:
+	INEST
+
+0xcc56: 0x12b0 call #0xc098                             cycles: 5
+0xcc58: 0xc098
+
+	.dw	TICK,COMMA,EXIT
+
+;   COMPILE	( -- )
+;	Compile the next address in colon list to code dictionary.
+;	.dw	BCOMP-10
+;	.db COMPO+7,"COMPILE"
+COMPI:
+	INEST
+
+0xcc60: 0x12b0 call #0xc098                             cycles: 5
+0xcc62: 0xc098
+
+	.dw	RFROM,DUPP,AT,COMMA	;compile address
+	.dw	CELLP,TOR,EXIT	;adjust return address
+
+;   LITERAL	( w -- )
+;	Compile tos to code dictionary as an integer literal.
+;	.dw	COMPI-8
+  .dw COMMA-2               ; MM-180701
+	.db IMEDD+7,"LITERAL"     ;
+LITER:
+	INEST
+
+0xcc7c: 0x12b0 call #0xc098                             cycles: 5
+0xcc7e: 0xc098
+
+	.dw	COMPI,DOLIT,COMMA,EXIT
+
+;   $,"	( -- )
+;	Compile a literal string up to next " .
+;	.dw	LITER-8
+;	.db 3,"$,"""
+STRCQ:
+	INEST
+
+0xcc88: 0x12b0 call #0xc098                             cycles: 5
+0xcc8a: 0xc098
+
+;   .dw     DOLIT,""""      ; MM-180624 assembles to |DOLIT|0000H|
+    .dw     DOLIT,0022H     ;           should be |DOLIT|ASCII(")|
+	.dw	WORDD	;move string to code dictionary
+	.dw	STRCQ1,EXIT
+
+STRCQ1:
+	INEST
+
+0xcc96: 0x12b0 call #0xc098                             cycles: 5
+0xcc98: 0xc098
+
+	.dw	DUPP,CAT,TWOSL	;calculate aligned end of string
+	.dw	TOR
+STRCQ2:
+	.dw	DUPP,AT,COMMA,CELLP
+	.dw	DONXT,STRCQ2
+	.dw	DROP,EXIT
+
+;; Structures
+
+;   FOR	( -- a )
+;	Start a FOR-NEXT loop structure in a colon definition.
+;	.dw	COMMA-2     ; MM-180701
+  .dw LITER-8
+	.db IMEDD+3,"FOR"
+FOR:
+	INEST
+
+0xccb8: 0x12b0 call #0xc098                             cycles: 5
+0xccba: 0xc098
+
+	.dw	COMPI,TOR,BEGIN,EXIT
+
+;   BEGIN	( -- a )
+;	Start an infinite or indefinite loop structure.
+	.dw	FOR-4
+	.db IMEDD+5,"BEGIN"
+BEGIN:
+	INEST
+
+0xcccc: 0x12b0 call #0xc098                             cycles: 5
+0xccce: 0xc098
+
+	.dw	CP,AT,EXIT
+
+;   NEXT	( a -- )
+;	Terminate a FOR-NEXT loop structure.
+	.dw	BEGIN-6
+	.db IMEDD+4,"NEXT",0
+NEXT:
+	INEST
+
+0xccde: 0x12b0 call #0xc098                             cycles: 5
+0xcce0: 0xc098
+
+	.dw	COMPI,DONXT,COMMA,EXIT
+
+;   UNTIL	( a -- )
+;	Terminate a BEGIN-UNTIL indefinite loop structure.
+	.dw	NEXT-6
+	.db IMEDD+5,"UNTIL"
+UNTIL:
+	INEST
+
+0xccf2: 0x12b0 call #0xc098                             cycles: 5
+0xccf4: 0xc098
+
+	.dw	COMPI,QBRAN,COMMA,EXIT
+
+;   AGAIN	( a -- )
+;	Terminate a BEGIN-AGAIN infinite loop structure.
+	.dw	UNTIL-6
+	.db IMEDD+5,"AGAIN"
+AGAIN:
+	INEST
+
+0xcd06: 0x12b0 call #0xc098                             cycles: 5
+0xcd08: 0xc098
+
+	.dw	COMPI,BRAN,COMMA,EXIT
+
+;   IF	( -- A )
+;	Begin a conditional branch structure.
+	.dw	AGAIN-6
+	.db IMEDD+2,"IF",0
+IFF:
+	INEST
+
+0xcd18: 0x12b0 call #0xc098                             cycles: 5
+0xcd1a: 0xc098
+
+	.dw	COMPI,QBRAN,BEGIN
+	.dw	DOLIT,2,IALLOT,EXIT
+
+;   AHEAD	( -- A )
+;	Compile a forward branch instruction.
+;	.dw	IFF-4
+;	.db IMEDD+5,"AHEAD"
+AHEAD:
+	INEST
+
+0xcd2a: 0x12b0 call #0xc098                             cycles: 5
+0xcd2c: 0xc098
+
+	.dw	COMPI,BRAN,BEGIN
+	.dw	DOLIT,2,IALLOT,EXIT
+
+;   REPEAT	( A a -- )
+;	Terminate a BEGIN-WHILE-REPEAT indefinite loop.
+	.dw	IFF-4
+	.db IMEDD+6,"REPEAT",0
+REPEA:
+	INEST
+
+0xcd46: 0x12b0 call #0xc098                             cycles: 5
+0xcd48: 0xc098
+
+	.dw	AGAIN,BEGIN,SWAP,ISTORE,EXIT
+
+;   THEN	( A -- )
+;	Terminate a conditional branch structure.
+	.dw	REPEA-8
+	.db IMEDD+4,"THEN",0
+THENN:
+	INEST
+
+0xcd5c: 0x12b0 call #0xc098                             cycles: 5
+0xcd5e: 0xc098
+
+	.dw	BEGIN,SWAP,QISTOR,EXIT
+
+;   AFT	( a -- a A )
+;	Jump to THEN in a FOR-AFT-THEN-NEXT loop the first time through.
+	.dw	THENN-6
+	.db IMEDD+3,"AFT"
+AFT:
+	INEST
+
+0xcd6e: 0x12b0 call #0xc098                             cycles: 5
+0xcd70: 0xc098
+
+	.dw	DROP,AHEAD,BEGIN,SWAP,EXIT
+
+;   ELSE	( A -- A )
+;	Start the false clause in an IF-ELSE-THEN structure.
+	.dw	AFT-4
+	.db IMEDD+4,"ELSE",0
+ELSEE:
+	INEST
+
+0xcd84: 0x12b0 call #0xc098                             cycles: 5
+0xcd86: 0xc098
+
+	.dw	AHEAD,SWAP,THENN,EXIT
+
+;   WHILE	( a -- A a )
+;	Conditional branch out of a BEGIN-WHILE-REPEAT loop.
+	.dw	ELSEE-6
+	.db IMEDD+5,"WHILE"
+WHILE:
+	INEST
+
+0xcd98: 0x12b0 call #0xc098                             cycles: 5
+0xcd9a: 0xc098
+
+	.dw	IFF,SWAP,EXIT
+
+;   ABORT"	( -- ; <string> )
+;	Conditional abort with an error message.
+	.dw	WHILE-6
+	.db IMEDD+6,"ABORT",022H,0 ;mk CCS: "ABORT""" ; naken: "ABORT",022H,
+ABRTQ:
+	INEST
+
+0xcdac: 0x12b0 call #0xc098                             cycles: 5
+0xcdae: 0xc098
+
+	.dw	COMPI,ABORQ,STRCQ,EXIT
+
+;   $"	( -- ; <string> )
+;	Compile an inline string literal.
+	.dw	ABRTQ-8
+	.db IMEDD+2,024H,022H,0 ;mk CCS: "$""" ; naken: 024H,022H,
+STRQ:
+	INEST
+
+0xcdbe: 0x12b0 call #0xc098                             cycles: 5
+0xcdc0: 0xc098
+
+	.dw	COMPI,STRQP,STRCQ,EXIT
+
+;   ."	( -- ; <string> )
+;	Compile an inline string literal to be typed out at run time.
+	.dw	STRQ-4
+	.db IMEDD+2,02EH,022H,0 ;mk CCS: ".""" ; naken: 02EH,022H,
+DOTQ:
+	INEST
+
+0xcdd0: 0x12b0 call #0xc098                             cycles: 5
+0xcdd2: 0xc098
+
+	.dw	COMPI,DOTQP,STRCQ,EXIT
+
+;; Colon compiler
+
+;   ?UNIQUE	( a -- a )
+;	Display a warning message if the word already exists.
+;	.dw	DOTQ-4
+;	.db 7,"?UNIQUE"
+UNIQU:
+	INEST
+
+0xcddc: 0x12b0 call #0xc098                             cycles: 5
+0xcdde: 0xc098
+
+	.dw	DUPP,NAMEQ	;?name exists
+	.dw	QBRAN,UNIQ1	;redefinitions are OK
+	.dw	DOTQP
+	.db 7," reDef "	;but warn the user
+	.dw	OVER,COUNT,TYPEE	;just in case its not planned
+UNIQ1:
+	.dw	DROP,EXIT
+
+;   $,n	( na -- )
+;	Build a new dictionary name using the string at na.
+;	.dw	UNIQU-8
+;	.db 3,"$,n"
+SNAME:
+	INEST
+
+0xcdfc: 0x12b0 call #0xc098                             cycles: 5
+0xcdfe: 0xc098
+
+	.dw	DUPP,CAT	;?null input
+	.dw	QBRAN,SNAM1
+	.dw	UNIQU	;?redefinition
+	.dw	LAST,AT,COMMA	;save na for vocabulary link
+	.dw	CP,AT,LAST,STORE
+	.dw	STRCQ1,EXIT	;fill name field
+SNAM1:
+	.dw	STRQP
+	.db 5," name"	;null input
+	.dw	ERROR
+
+;   $COMPILE	( a -- )
+;	Compile next word to code dictionary as a token or literal.
+;	.dw	UNIQU-8
+;	.db 8,"$COMPILE",0
+SCOMP:
+	INEST
+
+0xce26: 0x12b0 call #0xc098                             cycles: 5
+0xce28: 0xc098
+
+	.dw	NAMEQ,QDUP	;?defined
+	.dw	QBRAN,SCOM2
+	.dw	AT,DOLIT,IMEDD,ANDD	;?immediate
+	.dw	QBRAN,SCOM1
+	.dw	EXECU,EXIT	;its immediate, execute
+SCOM1:	.dw	COMMA,EXIT	;its not immediate, compile
+SCOM2:	.dw	NUMBQ	;try to convert to number
+	.dw	QBRAN,SCOM3
+	.dw	LITER,EXIT	;compile number as integer
+SCOM3:	.dw	ERROR	;error
+
+;   OVERT	( -- )
+;	Link a new word into the current vocabulary.
+;	.dw	SCOMP-10
+;	.db 5,"OVERT"
+OVERT:
+	INEST
+
+0xce52: 0x12b0 call #0xc098                             cycles: 5
+0xce54: 0xc098
+
+	.dw	LAST,AT,CNTXT,STORE,EXIT
+
+;   ;	( -- )
+;	Terminate a colon definition.
+	.dw	DOTQ-4
+	.db IMEDD+COMPO+1,";"
+SEMIS:
+	INEST
+
+0xce64: 0x12b0 call #0xc098                             cycles: 5
+0xce66: 0xc098
+
+	.dw	COMPI,EXIT,LBRAC,OVERT,EXIT
+
+;   ]	( -- )
+;	Start compiling the words in the input stream.
+	.dw	SEMIS-2
+	.db 1,"]"
+RBRAC:
+	INEST
+
+0xce76: 0x12b0 call #0xc098                             cycles: 5
+0xce78: 0xc098
+
+	.dw	DOLIT,SCOMP,TEVAL,STORE,EXIT
+
+;   :	( -- ; <string> )
+;	Start a new colon definition using next word as its name.
+	.dw	RBRAC-2
+	.db 1,":"
+COLON:
+	INEST
+
+0xce88: 0x12b0 call #0xc098                             cycles: 5
+0xce8a: 0xc098
+
+	.dw	TOKEN,SNAME,DOLIT,DOLST
+	.dw	CALLC,RBRAC,EXIT
+
+;; Defining words
+
+;   HEADER	( -- ; <string> )
+;	Compile a new array entry without allocating code space.
+;	.dw	DOCON-6
+;	.db 6,"HEADER",0
+HEADER:
+	INEST
+
+0xce9a: 0x12b0 call #0xc098                             cycles: 5
+0xce9c: 0xc098
+
+	.dw	TOKEN,SNAME,OVERT
+	.dw	DOLIT,DOCON,CALLC,EXIT
+
+;   CREATE	( -- ; <string> )
+;	Compile a new array entry without allocating code space.
+	.dw	COLON-2
+	.db 6,"CREATE",0
+CREAT:
+	INEST
+
+0xceb6: 0x12b0 call #0xc098                             cycles: 5
+0xceb8: 0xc098
+
+	.dw	HEADER,DP,AT,COMMA,EXIT
+
+;   CONSTANT	( n -- ; <string> )
+;	Compile a new constant.
+	.dw	CREAT-8
+	.db 8,"CONSTANT",0
+CONST:
+	INEST
+
+0xced0: 0x12b0 call #0xc098                             cycles: 5
+0xced2: 0xc098
+
+	.dw	HEADER,COMMA,EXIT
+
+;   VARIABLE	( -- ; <string> )
+;	Compile a new variable initialized to 0.
+	.dw	CONST-10
+	.db 8,"VARIABLE",0
+VARIA:
+	INEST
+
+0xcee6: 0x12b0 call #0xc098                             cycles: 5
+0xcee8: 0xc098
+
+	.dw	CREAT,DOLIT,2,ALLOT,EXIT
+
+;; Tools
+
+;   '	( -- ca )
+;	Search context vocabularies for the next word in input stream.
+	.dw	VARIA-10
+	.db 1,"'"
+TICK:
+	INEST
+
+0xcef8: 0x12b0 call #0xc098                             cycles: 5
+0xcefa: 0xc098
+
+	.dw	TOKEN,NAMEQ	;?defined
+	.dw	QBRAN,TICK1
+	.dw	EXIT	;yes, push code address
+TICK1:
+	.dw	ERROR	;no, error
+
+;   DUMP	( a u -- )
+;	Dump u bytes from a, in a formatted manner.
+	.dw	TICK-2
+	.db 4,"DUMP",0
+DUMP:
+	INEST
+
+0xcf10: 0x12b0 call #0xc098                             cycles: 5
+0xcf12: 0xc098
+
+	.dw	DOLIT,7,TOR	;start count down loop
+DUMP1:
+	.dw	CR,DUPP,DOLIT,5,UDOTR
+	.dw	DOLIT,15,TOR
+DUMP2:
+	.dw	COUNT,DOLIT,3,UDOTR
+	.dw	DONXT,DUMP2	;loop till done
+	.dw	SPACE,DUPP,DOLIT,16,SUBB
+	.dw	DOLIT,16,TYPEE	;display printable characters
+	.dw	DONXT,DUMP1	;loop till done
+	.dw	DROP,EXIT
+
+;   .S	( ... -- ... )
+;	Display the contents of the data stack.
+	.dw	DUMP-6
+	.db 2,".S",0
+DOTS:
+	INEST
+
+0xcf54: 0x12b0 call #0xc098                             cycles: 5
+0xcf56: 0xc098
+
+	.dw	CR,DEPTH	;stack depth
+	.dw	TOR	;start count down loop
+	.dw	BRAN,DOTS2	;skip first pass
+DOTS1:
+	.dw	RAT,PICK,DOT	;index stack, display contents
+DOTS2:
+	.dw	DONXT,DOTS1	;loop till done
+	.dw	DOTQP
+	.db 4," <sp",0
+	.dw	EXIT
+
+;   >NAME	( ca -- na | F )
+;	Convert code address to a name address.
+;	.dw	DOTS-4
+;	.db 5,">NAME"
+TNAME:
+	INEST
+
+0xcf76: 0x12b0 call #0xc098                             cycles: 5
+0xcf78: 0xc098
+
+	.dw	TOR,CNTXT,AT	;vocabulary link
+TNAM1:
+	.dw	DUPP,QBRAN,TNAM2
+	.dw	DUPP,NAMET,RAT,XORR	;compare
+	.dw	QBRAN,TNAM2
+	.dw	CELLM	;continue with next word
+	.dw	AT,BRAN,TNAM1
+TNAM2:
+	.dw	RFROM,DROP,EXIT
+
+;   .ID	( na -- )
+;	Display the name at address.
+;	.dw	TNAME-6
+;	.db 3,".ID"
+DOTID:
+	INEST
+
+0xcfa0: 0x12b0 call #0xc098                             cycles: 5
+0xcfa2: 0xc098
+
+	.dw	COUNT,DOLIT,01FH,ANDD	;mask lexicon bits
+	.dw	TYPEE,EXIT
+
+;   WORDS	( -- )
+;	Display the names in the context vocabulary.
+	.dw	DOTS-4
+	.db 5,"WORDS"
+WORDS:
+	INEST
+
+0xcfb8: 0x12b0 call #0xc098                             cycles: 5
+0xcfba: 0xc098
+
+	.dw	CR,CNTXT,AT	;only in context
+WORS1:
+	.dw	QDUP	;?at end of list
+	.dw	QBRAN,WORS2
+	.dw	DUPP,SPACE,DOTID	;display a name
+	.dw	CELLM,AT,BRAN,WORS1
+WORS2:
+	.dw	EXIT
+
+;; Cold boot
+
+;   HI	( -- )
+;	Display the sign-on message of eForth.
+	.dw	WORDS-6
+	.db 2,"HI",0
+HI:
+	INEST
+
+0xcfde: 0x12b0 call #0xc098                             cycles: 5
+0xcfe0: 0xc098
+
+	.dw	CR,DOTQP
+	.db 13,"430eForth43n1"	;model
+;	.dw	CR,EXIT   ; MM-180629
+	.dw	EXIT
+
+;   APP!	( a -- )	Turnkey
+;	HEX : APP! 200 ! 1000 IERASE 200 1000 20 IWRITE ;
+	.dw	HI-4
+	.db 4,"APP!",0
+APPST:
+	INEST
+
+0xcffe: 0x12b0 call #0xc098                             cycles: 5
+0xd000: 0xc098
+
+	.dw	TBOOT,STORE,DOLIT,0x1000,IERASE
+	.dw	TBOOT,DOLIT,0x1000,DOLIT,0x20
+	.dw	IWRITE,EXIT
+
+; -- Flash tools ------------------------ ; MM-180629 ...
+
+EDM equ 0FFC0H-2  ; top of users dictionary space in the flash memory
+
+; FSCAN ( -- )  ; MM-180629
+; Scan the Flash memory from EDM downwards and set CP to the next free cell
+; above the last used one.
+FSCAN:
+  INEST
+
+0xd01a: 0x12b0 call #0xc098                             cycles: 5
+0xd01c: 0xc098
+
+   .dw DOLIT,EDM
+FSCN1:
+   .dw DOLIT,2,SUBB,DUPP,AT,DOLIT,EM,SUBB
+   .dw QBRAN,FSCN1
+   .dw DOLIT,2,PLUS,CP,AT,ALGND,MAX,CP,STORE,EXIT  ;
+
+; ?flash ( a -- a )  ; MM-180707
+; Abort if user dictionary is full ( a > EDM )
+QFLASH:
+; EDM OVER U< ABORT"  ?Flash"
+  INEST 
+0xd04a: 0x12b0 call #0xc098                             cycles: 5
+0xd04c: 0xc098
+
+
+  .dw DOLIT,EDM,OVER,ULESS,ABORQ,
+  .db 7," ?flash"
+  .dw EXIT
+
+; ---------------------------------------------------------
+
+;   COLD	( -- )
+;	The hilevel cold start sequence.
+ 	.dw	APPST-6
+	.db 4,"COLD",0
+COLD:
+	INEST
+
+0xd06a: 0x12b0 call #0xc098                             cycles: 5
+0xd06c: 0xc098
+
+	.dw	STOIO
+	.dw	DOLIT,UZERO,DOLIT,UPP
+	.dw	DOLIT,ULAST-UZERO,CMOVE	;initialize user area
+	.dw	TBOOT,ATEXE	;application boot
+  .dw FSCAN,CR                                    ;MM-180629
+	.dw	QUIT	;start interpretation
+
+init:                ;mk Put it closer to cold : jmp was out of range.
+	mov	#RPP,SP	; set up stack
+
+0xd088: 0x4031 mov.w #0x03f8, SP                        cycles: 2
+0xd08a: 0x03f8
+
+	mov	#SPP,stack
+
+0xd08c: 0x4035 mov.w #0x0378, r5                        cycles: 2
+0xd08e: 0x0378
+
+	clr	tos
+
+0xd090: 0x4304 mov.w #0, r4                             cycles: 1
+
+	mov.w   #WDTPW+WDTHOLD,&WDTCTL  ; Stop watchdog timer
+
+0xd092: 0x40b2 mov.w #0x5a80, &0x0120                   cycles: 5
+0xd094: 0x5a80
+0xd096: 0x0120
+
+	bis.b   #041h,&P1DIR	; P1.0/6 output
+
+0xd098: 0xd0f2 bis.b #0x41, &0x0022                     cycles: 5
+0xd09a: 0x0041
+0xd09c: 0x0022
+
+	jmp	COLD
+
+0xd09e: 0x3fe5 jmp 0xd06a  (offset: -54)                cycles: 2
+
+
+CTOP:
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;
+; COLD start moves the following to user variables.
+
+;	.sect	".infoD"  ; CCS: .sect ; naken: .org   ;mk
+    .org 01000H ;mk
+;   1000-10FF = 256B information memory   ;mk
+;   INFO+000h (INFOD):  RAM save area, user variables ;mk
+;   INFO+040h (INFOC):  RAM save area ??? ;mk
+;   INFO+080h (INFOB):  user interrupt vectors ??? ;mk
+;   INFO+0C0h (INFOA):  configuration data - do not use!! ;mk
+
+UZERO:
+	.dw	HI	;200H, boot routine
+	.dw	BASEE	;202H, BASE
+	.dw	0	;204H, tmp
+	.dw	0	;206H, >IN
+	.dw	0	;208H, #TIB
+	.dw	0	;20AH, HLD
+	.dw	INTER	;20CH, 'EVAL
+	.dw	COLD-6	;20EH, CONTEXT pointer
+	.dw	CTOP+8	;210H, CP; pass ISR
+	.dw	DPP	;220H, DP
+	.dw	COLD-6	;214H, LAST
+ULAST:
+
+;===============================================================
+;	.sect   ".reset"	; MSP430 RESET Vector  ;mk
+
+; Interrupt vectors are located in the range FFE0-FFFFh.
+;       .org 0FFE0h
+intvecs: 
+;        DC16 VECAREA+00      ; FFE0 - not used
+;        DC16  VECAREA+04     ; FFE2 - not used
+;        DC16  VECAREA+08     ; FFE4 - IO port P1
+;        DC16  VECAREA+12     ; FFE6 - IO port P2
+;        DC16  VECAREA+16     ; FFE8 - not used
+;        DC16  VECAREA+20     ; FFEA - ADC10
+;        DC16  VECAREA+24     ; FFEC - USCI A0/B0 tx, I2C tx/rx
+;        DC16  VECAREA+28     ; FFEE - USCI A0/B0 rx, I2C status
+;        DC16  VECAREA+32     ; FFF0 - Timer 0_A3
+;        DC16  VECAREA+36     ; FFF2 - Timer 0_A3
+;        DC16  VECAREA+40     ; FFF4 - Watchdog
+;        DC16  VECAREA+44     ; FFF6 - Comparator A
+;        DC16  VECAREA+48     ; FFF8 - Timer 1_A3
+;        DC16  VECAREA+52     ; FFFA - Timer 1_A3
+;        DC16  VECAREA+56     ; FFFC - NMI, osc.fault, flash violation
+         .org 0FFFEh
+         DC16  init           ; FFFE - Reset
+
+	.end
+data sections:
+1000: de cf 0a 00 00 00 00 00 00 00 00 00 dc ca 64 d0  ..............d.
+1010: a8 d0 20 02 64 d0                                .. .d.
+c000: 00 00 04 3f 4b 45 59 00                          ...?KEY.
+c020: 02 c0 03 4b 45 59                                ...KEY
+c038: 22 c0 04 45 4d 49 54 00                          "..EMIT.
+c0a0: 3a c0 04 45 58 49 54 00                          :..EXIT.
+c0ac: a2 c0 07 45 58 45 43 55 54 45                    ...EXECUTE
+c0bc: ae c0 08 40 45 58 45 43 55 54 45 00              ...@EXECUTE.
+c0e6: be c0 01 21                                      ...!
+c0f2: e8 c0 01 40                                      ...@
+c0fa: f4 c0 02 43 21 00                                ...C!.
+c10a: fc c0 02 43 40 00                                ...C@.
+c11a: 0c c1 02 52 3e 00                                ...R>.
+c12a: 1c c1 02 52 40 00                                ...R@.
+c13c: 2c c1 42 3e 52 00                                ,.B>R.
+c150: 3e c1 04 44 52 4f 50 00                          >..DROP.
+c15c: 52 c1 03 44 55 50                                R..DUP
+c16a: 5e c1 04 53 57 41 50 00                          ^..SWAP.
+c17c: 6c c1 04 4f 56 45 52 00                          l..OVER.
+c190: 7e c1 02 30 3c 00                                ...0<.
+c1a2: 92 c1 03 41 4e 44                                ...AND
+c1ac: a4 c1 02 4f 52 00                                ...OR.
+c1b6: ae c1 03 58 4f 52                                ...XOR
+c1c0: b8 c1 03 55 4d 2b                                ...UM+
+c1d2: c2 c1 04 3f 44 55 50 00                          ...?DUP.
+c1e0: d4 c1 03 52 4f 54                                ...ROT
+c1f8: e2 c1 05 32 44 52 4f 50                          ...2DROP
+c206: fa c1 04 32 44 55 50 00                          ...2DUP.
+c21e: 08 c2 01 2b                                      ...+
+c226: 20 c2 02 44 2b 00                                 ..D+.
+c238: 28 c2 03 4e 4f 54                                (..NOT
+c242: 3a c2 06 4e 45 47 41 54 45 00                    :..NEGATE.
+c252: 44 c2 07 44 4e 45 47 41 54 45                    D..DNEGATE
+c26a: 54 c2 01 2d                                      T..-
+c272: 6c c2 03 41 42 53                                l..ABS
+c27e: 74 c2 01 3d                                      t..=
+c288: 80 c2 02 55 3c 00                                ...U<.
+c296: 8a c2 01 3c                                      ...<
+c2a2: 98 c2 01 3e                                      ...>
+c2ac: a4 c2 03 4d 41 58                                ...MAX
+c2bc: ae c2 03 4d 49 4e                                ...MIN
+c2c8: be c2 06 55 4d 2f 4d 4f 44 00                    ...UM/MOD.
+c300: ca c2 05 4d 2f 4d 4f 44                          ...M/MOD
+c30c: 62 c1 96 c1 62 c1 42 c1 d2 c0 20 c3 4c c2 42 c1  b...b.B... .L.B.
+c31c: 5c c2 20 c1 42 c1 62 c1 96 c1 d2 c0 2e c3 30 c1  \. .B.b.......0.
+c32c: 22 c2 20 c1 d2 c2 20 c1 d2 c0 3e c3 72 c1 4c c2  ". ... ...>.r.L.
+c33c: 72 c1 a8 c0 02 c3 04 2f 4d 4f 44 00              r....../MOD.
+c34c: 84 c1 96 c1 72 c1 08 c3 a8 c0 42 c3 03 4d 4f 44  ....r.....B..MOD
+c360: 48 c3 58 c1 a8 c0 58 c3 01 2f                    H.X...X../
+c36e: 48 c3 72 c1 58 c1 a8 c0 68 c3 03 55 4d 2a        H.r.X...h..UM*
+c39c: 78 c3 01 2a                                      x..*
+c3a4: 7c c3 58 c1 a8 c0 9e c3 02 4d 2a 00              ..X......M*.
+c3b4: 0e c2 bc c1 96 c1 42 c1 78 c2 72 c1 78 c2 7c c3  ......B.x.r.x...
+c3c4: 20 c1 d2 c0 cc c3 5c c2 a8 c0 ac c3 05 2a 2f 4d   .....\......*/M
+c3d4: 4f 44                                            OD
+c3da: 42 c1 b0 c3 20 c1 08 c3 a8 c0 d0 c3 02 2a 2f 00  B... ........*/.
+c3ee: d6 c3 72 c1 58 c1 a8 c0                          ..r.X...
+c406: e6 c3 02 32 2a 00                                ...2*.
+c410: 08 c4 02 32 2f 00                                ...2/.
+c41a: 12 c4 07 41 4c 49 47 4e 45 44                    ...ALIGNED
+c42e: 02 c7 b2 c2 82 c0 7e 00 c2 c2 a8 c0 1c c4 05 44  ...............D
+c43e: 45 50 54 48                                      EPTH
+c454: 3c c4 04 50 49 43 4b 00                          <..PICK.
+c464: 56 c4 02 2b 21 00                                V..+!.
+c472: 66 c4 05 43 4f 55 4e 54                          f..COUNT
+c486: 74 c4 05 43 4d 4f 56 45                          t..CMOVE
+c4a2: 88 c4 04 46 49 4c 4c 00                          ...FILL.
+c4be: a4 c4 05 27 42 4f 4f 54                          ...'BOOT
+c4ca: 00 02 c0 c4 04 42 41 53 45 00                    .....BASE.
+c4d8: 02 02                                            ..
+c4de: 04 02                                            ..
+c4e4: 06 02                                            ..
+c4ea: 08 02                                            ..
+c4f0: 0a 02                                            ..
+c4f6: 0c 02                                            ..
+c4fc: 0e 02 ce c4 02 43 50 00                          .....CP.
+c508: 10 02 00 c5 02 44 50 00                          .....DP.
+c514: 12 02                                            ..
+c51a: 14 02 0c c5 04 48 45 52 45 00                    .....HERE.
+c528: 10 c5 f6 c0 a8 c0 1e c5 03 50 41 44              .........PAD
+c538: 24 c5 82 c0 50 00 22 c2 a8 c0 30 c5 03 54 49 42  $...P."...0..TIB
+c54c: 80 03                                            ..
+c562: 82 c0 00 00 72 c1 d2 c2 72 c1 4e c5 a8 c0 44 c5  ....r...r.N...D.
+c572: 02 3c 23 00                                      .<#.
+c57a: 34 c5 ec c4 ea c0 a8 c0 72 c5 04 48 4f 4c 44 00  4.......r..HOLD.
+c58e: ec c4 f6 c0 fa c3 62 c1 ec c4 ea c0 00 c1 a8 c0  ......b.........
+c59e: 84 c5 01 23                                      ...#
+c5a6: d4 c4 f6 c0 5e c5 8a c5 a8 c0 a0 c5 02 23 53 00  ....^........#S.
+c5ba: a2 c5 62 c1 d2 c0 c6 c5 ce c0 ba c5 a8 c0 b2 c5  ..b.............
+c5ca: 04 53 49 47 4e 00                                .SIGN.
+c5d4: 96 c1 d2 c0 e0 c5 82 c0 2d 00 8a c5 a8 c0 ca c5  ........-.......
+c5e4: 02 23 3e 00                                      .#>.
+c5ec: 58 c1 ec c4 f6 c0 34 c5 84 c1 6e c2 a8 c0        X.....4...n...
+c5fe: 62 c1 42 c1 78 c2 76 c5 b6 c5 20 c1 d0 c5 e8 c5  b.B.x.v... .....
+c60e: a8 c0 e4 c5 03 48 45 58                          .....HEX
+c61e: 12 c6 07 44 45 43 49 4d 41 4c                    ...DECIMAL
+c658: 20 c6 07 4e 55 4d 42 45 52 3f                     ..NUMBER?
+c666: d4 c4 f6 c0 42 c1 82 c0 00 00 84 c1 7a c4 84 c1  ....B...........
+c676: 10 c1 82 c0 24 00 82 c2 d2 c0 8c c6 16 c6 72 c1  ....$.........r.
+c686: f6 c3 72 c1 fa c3 84 c1 10 c1 82 c0 2d 00 82 c2  ..r.........-...
+c696: 42 c1 72 c1 30 c1 6e c2 72 c1 30 c1 22 c2 da c1  B.r.0.n.r.0."...
+c6a6: d2 c0 f0 c6 fa c3 42 c1 62 c1 42 c1 10 c1 d4 c4  ......B.b.B.....
+c6b6: f6 c0 30 c6 d2 c0 e2 c6 72 c1 d4 c4 f6 c0 a0 c3  ..0.....r.......
+c6c6: 22 c2 20 c1 f6 c3 da c0 ae c6 30 c1 72 c1 58 c1  ". .......0.r.X.
+c6d6: d2 c0 dc c6 4c c2 72 c1 ce c0 ee c6 20 c1 20 c1  ....L.r..... . .
+c6e6: 00 c2 00 c2 82 c0 00 00 62 c1 20 c1 00 c2 20 c1  ........b. ... .
+c6f6: d4 c4 ea c0 a8 c0 5a c6 02 42 4c 00              ......Z..BL.
+c706: 20 00 fe c6 05 53 50 41 43 45                     ....SPACE
+c714: 02 c7 40 c0 a8 c0 0a c7 06 53 50 41 43 45 53 00  ..@......SPACES.
+c728: 82 c0 00 00 b2 c2 42 c1 ce c0 36 c7 10 c7 da c0  ......B...6.....
+c738: 34 c7 a8 c0 1c c7 04 54 59 50 45 00              4......TYPE.
+c748: 42 c1 ce c0 58 c7 62 c1 10 c1 2a c4 40 c0 f6 c3  B...X.b...*.@...
+c758: da c0 4e c7 58 c1 a8 c0 3e c7 02 43 52 00        ..N.X...>..CR.
+c76a: 82 c0 0d 00 40 c0 82 c0 0a 00 40 c0 a8 c0        ....@.....@...
+c77c: 20 c1 30 c1 20 c1 7a c4 22 c2 24 c4 42 c1 72 c1   .0. ...".$.B.r.
+c78c: 42 c1 a8 c0                                      B...
+c794: 78 c7 a8 c0                                      x...
+c79c: 78 c7 7a c4 44 c7 a8 c0 62 c7 02 2e 52 00        x...D...b...R.
+c7ae: 42 c1 fa c5 20 c1 84 c1 6e c2 24 c7 44 c7 a8 c0  B... ...n.$.D...
+c7be: a6 c7 03 55 2e 52                                ...U.R
+c7c8: 42 c1 76 c5 b6 c5 e8 c5 20 c1 84 c1 6e c2 24 c7  B.v..... ...n.$.
+c7d8: 44 c7 a8 c0 c0 c7 02 55 2e 00                    D......U..
+c7e6: 76 c5 b6 c5 e8 c5 10 c7 44 c7 a8 c0 de c7 01 2e  v.......D.......
+c7fa: d4 c4 f6 c0 82 c0 0a 00 bc c1 d2 c0 0c c8 e2 c7  ................
+c80a: a8 c0 fa c5 10 c7 44 c7 a8 c0 f4 c7 01 3f        ......D......?
+c81c: f6 c0 f6 c7 a8 c0                                ......
+c826: da c4 ea c0 84 c1 42 c1 62 c1 d2 c0 ae c8 fa c3  ......B.b.......
+c836: da c4 f6 c0 02 c7 82 c2 d2 c0 68 c8 42 c1 02 c7  ..........h.B...
+c846: 84 c1 10 c1 6e c2 96 c1 3e c2 d2 c0 66 c8 f6 c3  ....n...>...f...
+c856: da c0 44 c8 20 c1 58 c1 82 c0 00 00 62 c1 a8 c0  ..D. .X.....b...
+c866: 20 c1 84 c1 72 c1 42 c1 da c4 f6 c0 84 c1 10 c1   ...r.B.........
+c876: 6e c2 da c4 f6 c0 02 c7 82 c2 d2 c0 86 c8 96 c1  n...............
+c886: d2 c0 98 c8 f6 c3 da c0 6e c8 62 c1 42 c1 ce c0  ........n.b.B...
+c896: a2 c8 20 c1 58 c1 62 c1 f6 c3 42 c1 84 c1 6e c2  .. .X.b...B...n.
+c8a6: 20 c1 20 c1 6e c2 a8 c0 84 c1 20 c1 6e c2 a8 c0   . .n..... .n...
+c8ba: 42 c1 48 c5 e6 c4 f6 c0 22 c2 e0 c4 f6 c0 e6 c4  B.H.....".......
+c8ca: f6 c0 6e c2 20 c1 22 c8 e6 c4 6a c4 a8 c0 16 c8  ..n. ."...j.....
+c8da: 82 2e 28 00                                      ..(.
+c8e2: 82 c0 29 00 b6 c8 44 c7 a8 c0 da c8 81 28        ..)...D......(
+c8f4: 82 c0 29 00 b6 c8 00 c2 a8 c0 ee c8 81 5c        ..)..........\
+c906: e0 c4 f6 c0 e6 c4 ea c0 a8 c0 00 c9 04 43 48 41  .............CHA
+c916: 52 00                                            R.
+c91c: 02 c7 b6 c8 58 c1 10 c1 a8 c0 12 c9 05 54 4f 4b  ....X........TOK
+c92c: 45 4e                                            EN
+c932: 02 c7 b6 c8 82 c0 1f 00 c2 c2 24 c5 0e c2 00 c1  ..........$.....
+c942: f6 c3 72 c1 8e c4 24 c5 82 c0 00 00 24 c5 7a c4  ..r...$.....$...
+c952: 22 c2 00 c1 a8 c0 28 c9 04 57 4f 52 44 00        ".....(..WORD.
+c964: b6 c8 ce c0 3c c9                                ....<.
+c9a8: f8 c4 f6 c0 62 c1 d2 c0 e0 c9 84 c1 f6 c0 84 c1  ....b...........
+c9b8: f6 c0 82 c0 1f 7f a8 c1 82 c2 d2 c0 cc c9 78 c9  ..............x.
+c9c8: d2 c0 d4 c9 02 c4 f6 c0 ce c0 ac c9 72 c1 58 c1  ............r.X.
+c9d8: 62 c1 6a c9 72 c1 a8 c0 a8 c0                    b.j.r.....
+c9e6: 42 c1 84 c1 20 c1 72 c1 84 c1 bc c1 d2 c0 08 ca  B... .r.........
+c9f6: 82 c0 08 00 40 c0 fa c3 02 c7 40 c0 82 c0 08 00  ....@.....@.....
+ca06: 40 c0 a8 c0                                      @...
+ca0e: 62 c1 40 c0 84 c1 00 c1 f6 c3 a8 c0              b.@.........
+ca1e: 62 c1 82 c0 0d 00 bc c1 d2 c0 3e ca 82 c0 08 00  b.........>.....
+ca2e: bc c1 d2 c0 3a ca 02 c7 0a ca a8 c0 e2 c9 a8 c0  ....:...........
+ca3e: 58 c1 72 c1 58 c1 62 c1 a8 c0 5a c9 06 41 43 43  X.r.X.b...Z..ACC
+ca4e: 45 50 54 00                                      EPT.
+ca56: 84 c1 22 c2 84 c1 0e c2 bc c1 d2 c0 82 ca 26 c0  .."...........&.
+ca66: 62 c1 02 c7 6e c2 82 c0 5f 00 8e c2 d2 c0 7c ca  b...n..._.......
+ca76: 0a ca ce c0 5c ca 1a ca ce c0 5c ca 58 c1 84 c1  ....\.....\.X...
+ca86: 6e c2 a8 c0 4a ca 05 51 55 45 52 59              n...J..QUERY
+ca96: 48 c5 82 c0 50 00 52 ca e0 c4 ea c0 58 c1 82 c0  H...P.R.....X...
+caa6: 00 00 e6 c4 ea c0 a8 c0                          ........
+cab2: 10 c7 7a c4 44 c7 82 c0 3f 00 40 c0 66 c7 48 c1  ....D...?.@.f.H.
+cac2: 7a cb                                            ..
+cac8: d2 c0 d6 ca 78 c7 7a c4 44 c7 48 c1 7a cb 78 c7  ....x...D.H...x.
+cad8: 58 c1 a8 c0                                      X...
+cae0: a4 c9 da c1 d2 c0 04 cb f6 c0 82 c0 40 00 a8 c1  ............@...
+caf0: c4 ca 0d 20 63 6f 6d 70 69 6c 65 20 6f 6e 6c 79  ... compile onl.
+cb00: b6 c0 a8 c0 62 c6 d2 c0 0c cb a8 c0 ae ca 8c ca  ....b...........
+cb10: 81 5b                                            .[
+cb16: 82 c0 dc ca f2 c4 ea c0 a8 c0                    ..........
+cb24: 82 c0 dc ca f2 c4 f6 c0 82 c2 d2 c0 38 cb 98 c7  ............8...
+cb34: 03 20 6f 6b 66 c7 a8 c0                          . okf...
+cb40: 42 c4 96 c1 c4 ca 0a 20 75 6e 64 65 72 66 6c 6f  B...... underflo
+cb50: 77 00 a8 c0                                      w...
+cb58: 2e c9 62 c1 10 c1 d2 c0 6c cb f2 c4 c8 c0 3c cb  ..b.....l.....<.
+cb68: ce c0 58 cb 58 c1 20 cb a8 c0 10 cb 04 51 55 49  ..X.X. ......QUI
+cb78: 54 00                                            T.
+cb7e: 14 c1 12 cb 92 ca 54 cb ce c0 82 cb 74 cb 05 41  ......T.....t..A
+cb8e: 4c 4c 4f 54                                      LLOT
+cb96: 10 c5 6a c4 a8 c0 8c cb 06 49 41 4c 4c 4f 54 00  ..j......IALLOT.
+cbaa: 04 c5 6a c4 a8 c0 9e cb 02 49 21 00              ..j......I!.
+cbda: 4a d0 b6 cb a8 c0 b2 cb 06 49 45 52 41 53 45 00  J........IERASE.
+cc04: e2 cb 06 49 57 52 49 54 45 00                    ...IWRITE.
+cc12: 16 c4 42 c1 84 c1 f6 c0 84 c1 d6 cb fe c3 72 c1  ..B...........r.
+cc22: fe c3 72 c1 da c0 16 cc 00 c2 a8 c0 06 cc 01 2c  ..r............,
+cc36: 04 c5 f6 c0 4a d0 62 c1 fe c3 04 c5 ea c0 b6 cb  ....J.b.........
+cc46: a8 c0                                            ..
+cc4c: 82 c0 b0 12 32 cc 32 cc a8 c0                    ....2.2...
+cc5a: f8 ce 32 cc a8 c0                                ..2...
+cc64: 20 c1 62 c1 f6 c0 32 cc fe c3 42 c1 a8 c0 30 cc   .b...2...B...0.
+cc74: 87 4c 49 54 45 52 41 4c                          .LITERAL
+cc80: 60 cc 82 c0 32 cc a8 c0                          `...2...
+cc8c: 82 c0 22 00 60 c9 96 cc a8 c0                    ..".`.....
+cc9a: 62 c1 10 c1 16 c4 42 c1 62 c1 f6 c0 32 cc fe c3  b.....B.b...2...
+ccaa: da c0 a2 cc 58 c1 a8 c0 74 cc 83 46 4f 52        ....X...t..FOR
+ccbc: 60 cc 42 c1 cc cc a8 c0 b4 cc 85 42 45 47 49 4e  `.B........BEGIN
+ccd0: 04 c5 f6 c0 a8 c0 c6 cc 84 4e 45 58 54 00        .........NEXT.
+cce2: 60 cc da c0 32 cc a8 c0 d8 cc 85 55 4e 54 49 4c  `...2......UNTIL
+ccf6: 60 cc d2 c0 32 cc a8 c0 ec cc 85 41 47 41 49 4e  `...2......AGAIN
+cd0a: 60 cc ce c0 32 cc a8 c0 00 cd 82 49 46 00        `...2......IF.
+cd1c: 60 cc d2 c0 cc cc 82 c0 02 00 a6 cb a8 c0        `.............
+cd2e: 60 cc ce c0 cc cc 82 c0 02 00 a6 cb a8 c0 14 cd  `...............
+cd3e: 86 52 45 50 45 41 54 00                          .REPEAT.
+cd4a: 06 cd cc cc 72 c1 b6 cb a8 c0 3e cd 84 54 48 45  ....r.....>..THE
+cd5a: 4e 00                                            N.
+cd60: cc cc 72 c1 d6 cb a8 c0 56 cd 83 41 46 54        ..r.....V..AFT
+cd72: 58 c1 2a cd cc cc 72 c1 a8 c0 6a cd 84 45 4c 53  X.*...r...j..ELS
+cd82: 45 00                                            E.
+cd88: 2a cd 72 c1 5c cd a8 c0 7e cd 85 57 48 49 4c 45  *.r.\......WHILE
+cd9c: 18 cd 72 c1 a8 c0 92 cd 86 41 42 4f 52 54 22 00  ..r......ABORT".
+cdb0: 60 cc c4 ca 88 cc a8 c0 a4 cd 82 24 22 00        `..........$".
+cdc2: 60 cc 90 c7 88 cc a8 c0 ba cd 82 2e 22 00        `...........".
+cdd4: 60 cc 98 c7 88 cc a8 c0                          `.......
+cde0: 62 c1 a4 c9 d2 c0 f8 cd 98 c7 07 20 72 65 44 65  b.......... reDe
+cdf0: 66 20 84 c1 7a c4 44 c7 58 c1 a8 c0              f ....D.X...
+ce00: 62 c1 10 c1 d2 c0 1c ce dc cd 16 c5 f6 c0 32 cc  b.............2.
+ce10: 04 c5 f6 c0 16 c5 ea c0 96 cc a8 c0 90 c7 05 20  ............... 
+ce20: 6e 61 6d 65 ae ca                                name..
+ce2a: a4 c9 da c1 d2 c0 46 ce f6 c0 82 c0 80 00 a8 c1  ......F.........
+ce3a: d2 c0 42 ce b6 c0 a8 c0 32 cc a8 c0 62 c6 d2 c0  ..B.....2...b...
+ce4a: 50 ce 7c cc a8 c0 ae ca                          P.......
+ce56: 16 c5 f6 c0 f8 c4 ea c0 a8 c0 cc cd c1 3b        .............;
+ce68: 60 cc a8 c0 12 cb 52 ce a8 c0 62 ce 01 5d        `.....R...b..]
+ce7a: 82 c0 26 ce f2 c4 ea c0 a8 c0 74 ce 01 3a        ..&.......t..:
+ce8c: 2e c9 fc cd 82 c0 98 c0 48 cc 76 ce a8 c0        ........H.v...
+ce9e: 2e c9 fc cd 52 ce 82 c0 8c c0 48 cc a8 c0 86 ce  ....R.....H.....
+ceae: 06 43 52 45 41 54 45 00                          .CREATE.
+ceba: 9a ce 10 c5 f6 c0 32 cc a8 c0 ae ce 08 43 4f 4e  ......2......CON
+ceca: 53 54 41 4e 54 00                                STANT.
+ced4: 9a ce 32 cc a8 c0 c6 ce 08 56 41 52 49 41 42 4c  ..2......VARIABL
+cee4: 45 00                                            E.
+ceea: b6 ce 82 c0 02 00 92 cb a8 c0 dc ce 01 27        .............'
+cefc: 2e c9 a4 c9 d2 c0 06 cf a8 c0 ae ca f6 ce 04 44  ...............D
+cf0c: 55 4d 50 00                                      UMP.
+cf14: 82 c0 07 00 42 c1 66 c7 62 c1 82 c0 05 00 c4 c7  ....B.f.b.......
+cf24: 82 c0 0f 00 42 c1 7a c4 82 c0 03 00 c4 c7 da c0  ....B...........
+cf34: 2a cf 10 c7 62 c1 82 c0 10 00 6e c2 82 c0 10 00  *...b.....n.....
+cf44: 44 c7 da c0 1a cf 58 c1 a8 c0 0a cf 02 2e 53 00  D.....X.......S.
+cf58: 66 c7 42 c4 42 c1 ce c0 68 cf 30 c1 5c c4 f6 c7  f.B.B...h.0.\...
+cf68: da c0 62 cf 98 c7 04 20 3c 73 70 00 a8 c0        ..b.... <sp...
+cf7a: 42 c1 f8 c4 f6 c0 62 c1 d2 c0 9a cf 62 c1 6a c9  B.....b.....b.j.
+cf8a: 30 c1 bc c1 d2 c0 9a cf 02 c4 f6 c0 ce c0 80 cf  0...............
+cf9a: 20 c1 58 c1 a8 c0                                 .X...
+cfa4: 7a c4 82 c0 1f 00 a8 c1 44 c7 a8 c0 50 cf 05 57  ........D...P..W
+cfb4: 4f 52 44 53                                      ORDS
+cfbc: 66 c7 f8 c4 f6 c0 da c1 d2 c0 d6 cf 62 c1 10 c7  f...........b...
+cfcc: a0 cf 02 c4 f6 c0 ce c0 c2 cf a8 c0 b2 cf 02 48  ...............H
+cfdc: 49 00                                            I.
+cfe2: 66 c7 98 c7 0d 34 33 30 65 46 6f 72 74 68 34 33  f....430eForth43
+cff2: 6e 31 a8 c0 da cf 04 41 50 50 21 00              n1.....APP!.
+d002: c6 c4 ea c0 82 c0 00 10 ea cb c6 c4 82 c0 00 10  ................
+d012: 82 c0 20 00 0e cc a8 c0                          .. .....
+d01e: 82 c0 be ff 82 c0 02 00 6e c2 62 c1 f6 c0 82 c0  ........n.b.....
+d02e: ff ff 6e c2 d2 c0 22 d0 82 c0 02 00 22 c2 04 c5  ..n..."....."...
+d03e: f6 c0 24 c4 b2 c2 04 c5 ea c0 a8 c0              ..$.........
+d04e: 82 c0 be ff 84 c1 8e c2 c4 ca 07 20 3f 66 6c 61  ........... ?fla
+d05e: 73 68 a8 c0 f8 cf 04 43 4f 4c 44 00              sh.....COLD.
+d06e: 4e c0 82 c0 00 10 82 c0 00 02 82 c0 16 00 8e c4  N...............
+d07e: c6 c4 c8 c0 1a d0 66 c7 7a cb                    ......f...
+fffe: 88 d0                                            ..
+
+
+Program Info:
+                         LABEL ADDRESS  SCOPE
+                          main 0000c000 0
+                          QKEY 0000c008 0
+                         QKEY1 0000c00e 0
+                           KEY 0000c026 0
+                          KEY1 0000c02c 0
+                          EMIT 0000c040 0
+                         EMIT1 0000c040 0
+                         STOIO 0000c04e 0
+                         DOLIT 0000c082 0
+                         DOCON 0000c08c 0
+                         DOLST 0000c098 0
+                          EXIT 0000c0a8 0
+                         EXECU 0000c0b6 0
+                         ATEXE 0000c0c8 0
+                          BRAN 0000c0ce 0
+                         QBRAN 0000c0d2 0
+                         DONXT 0000c0da 0
+                          SKIP 0000c0e2 0
+                         STORE 0000c0ea 0
+                            AT 0000c0f6 0
+                         CSTOR 0000c100 0
+                           CAT 0000c110 0
+                         RPSTO 0000c114 0
+                         RFROM 0000c120 0
+                           RAT 0000c130 0
+                           TOR 0000c142 0
+                         SPSTO 0000c148 0
+                          DROP 0000c158 0
+                          DUPP 0000c162 0
+                          SWAP 0000c172 0
+                          OVER 0000c184 0
+                         ZLESS 0000c196 0
+                         FALSE 0000c19a 0
+                          TRUE 0000c19e 0
+                          ANDD 0000c1a8 0
+                           ORR 0000c1b2 0
+                          XORR 0000c1bc 0
+                         UPLUS 0000c1c6 0
+                          QDUP 0000c1da 0
+                           ROT 0000c1e6 0
+                         DDROP 0000c200 0
+                          DDUP 0000c20e 0
+                          PLUS 0000c222 0
+                         DPLUS 0000c22c 0
+                         INVER 0000c23e 0
+                         NEGAT 0000c24c 0
+                         DNEGA 0000c25c 0
+                          SUBB 0000c26e 0
+                          ABSS 0000c278 0
+                         EQUAL 0000c282 0
+                         ULESS 0000c28e 0
+                          LESS 0000c29a 0
+                         GREAT 0000c2a6 0
+                           MAX 0000c2b2 0
+                          MAX1 0000c2b6 0
+                           MIN 0000c2c2 0
+                         UMMOD 0000c2d2 0
+                        UMMOD2 0000c2da 0
+                        UMMOD3 0000c2e4 0
+                        UMMOD4 0000c2e6 0
+                         MSMOD 0000c308 0
+                         MMOD1 0000c320 0
+                         MMOD2 0000c32e 0
+                         MMOD3 0000c33e 0
+                         SLMOD 0000c348 0
+                          MODD 0000c35c 0
+                         SLASH 0000c36a 0
+                         UMSTA 0000c37c 0
+                        UMSTA2 0000c382 0
+                        UMSTA3 0000c38c 0
+                        UMSTA4 0000c38e 0
+                          STAR 0000c3a0 0
+                         MSTAR 0000c3b0 0
+                         MSTA1 0000c3cc 0
+                         SSMOD 0000c3d6 0
+                         STASL 0000c3ea 0
+                          ONEP 0000c3f6 0
+                          ONEM 0000c3fa 0
+                         CELLP 0000c3fe 0
+                         CELLM 0000c402 0
+                         CELLS 0000c40c 0
+                         TWOSL 0000c416 0
+                         ALGND 0000c424 0
+                         TCHAR 0000c42a 0
+                         DEPTH 0000c442 0
+                          PICK 0000c45c 0
+                         PSTOR 0000c46a 0
+                         COUNT 0000c47a 0
+                         CMOVE 0000c48e 0
+                        CMOVE1 0000c494 0
+                        CMOVE2 0000c49a 0
+                        CMOVE3 0000c4a0 0
+                          FILL 0000c4aa 0
+                          FIL1 0000c4b0 0
+                          FIL2 0000c4b6 0
+                          FIL3 0000c4bc 0
+                         TBOOT 0000c4c6 0
+                          BASE 0000c4d4 0
+                          TEMP 0000c4da 0
+                          NTIB 0000c4e0 0
+                           INN 0000c4e6 0
+                           HLD 0000c4ec 0
+                         TEVAL 0000c4f2 0
+                         CNTXT 0000c4f8 0
+                            CP 0000c504 0
+                            DP 0000c510 0
+                          LAST 0000c516 0
+                          HERE 0000c524 0
+                           PAD 0000c534 0
+                           TIB 0000c548 0
+                         DIGIT 0000c54e 0
+                        DIGIT1 0000c558 0
+                         EXTRC 0000c55e 0
+                         BDIGS 0000c576 0
+                          HOLD 0000c58a 0
+                           DIG 0000c5a2 0
+                          DIGS 0000c5b6 0
+                         DIGS1 0000c5ba 0
+                         DIGS2 0000c5c6 0
+                          SIGN 0000c5d0 0
+                         SIGN1 0000c5e0 0
+                         EDIGS 0000c5e8 0
+                           STR 0000c5fa 0
+                           HEX 0000c616 0
+                         DECIM 0000c628 0
+                         DIGTQ 0000c630 0
+                        DIGTQ1 0000c648 0
+                        FALSE1 0000c650 0
+                         TRUE1 0000c654 0
+                         NUMBQ 0000c662 0
+                         NUMQ1 0000c68c 0
+                         NUMQ2 0000c6ae 0
+                         NUMQ3 0000c6dc 0
+                         NUMQ4 0000c6e2 0
+                         NUMQ5 0000c6ee 0
+                         NUMQ6 0000c6f0 0
+                         BLANK 0000c702 0
+                         SPACE 0000c710 0
+                         SPACS 0000c724 0
+                         CHAR1 0000c734 0
+                         CHAR2 0000c736 0
+                         TYPEE 0000c744 0
+                         TYPE1 0000c74e 0
+                         TYPE2 0000c758 0
+                            CR 0000c766 0
+                         DOSTR 0000c778 0
+                         STRQP 0000c790 0
+                         DOTQP 0000c798 0
+                          DOTR 0000c7aa 0
+                         UDOTR 0000c7c4 0
+                          UDOT 0000c7e2 0
+                           DOT 0000c7f6 0
+                          DOT1 0000c80c 0
+                         QUEST 0000c818 0
+                          PARS 0000c822 0
+                         PARS1 0000c844 0
+                         PARS2 0000c866 0
+                         PARS3 0000c868 0
+                         PARS4 0000c86e 0
+                         PARS5 0000c886 0
+                         PARS6 0000c898 0
+                         PARS7 0000c8a2 0
+                         PARS8 0000c8ae 0
+                         PARSE 0000c8b6 0
+                         DOTPR 0000c8de 0
+                         PAREN 0000c8f0 0
+                         BKSLA 0000c902 0
+                          CHAR 0000c918 0
+                         TOKEN 0000c92e 0
+                        TOKEN1 0000c93c 0
+                         WORDD 0000c960 0
+                         NAMET 0000c96a 0
+                         SAMEQ 0000c978 0
+                         SAME1 0000c984 0
+                         SAME2 0000c9a2 0
+                         NAMEQ 0000c9a4 0
+                         FIND1 0000c9ac 0
+                         FIND4 0000c9cc 0
+                         FIND2 0000c9d4 0
+                         FIND3 0000c9e0 0
+                          BKSP 0000c9e2 0
+                         BACK1 0000ca08 0
+                           TAP 0000ca0a 0
+                          KTAP 0000ca1a 0
+                         KTAP1 0000ca3a 0
+                         KTAP2 0000ca3e 0
+                         ACCEP 0000ca52 0
+                         ACCP1 0000ca5c 0
+                         ACCP2 0000ca7c 0
+                         ACCP3 0000ca7e 0
+                         ACCP4 0000ca82 0
+                         QUERY 0000ca92 0
+                         ERROR 0000caae 0
+                         ABORQ 0000cac4 0
+                         ABOR1 0000cad6 0
+                         INTER 0000cadc 0
+                         INTE1 0000cb04 0
+                         INTE2 0000cb0c 0
+                         LBRAC 0000cb12 0
+                         DOTOK 0000cb20 0
+                         DOTO1 0000cb38 0
+                         QSTAC 0000cb3c 0
+                          EVAL 0000cb54 0
+                         EVAL1 0000cb58 0
+                         EVAL2 0000cb6c 0
+                          QUIT 0000cb7a 0
+                         QUIT1 0000cb82 0
+                         ALLOT 0000cb92 0
+                        IALLOT 0000cba6 0
+                        ISTORE 0000cbb6 0
+                        QISTOR 0000cbd6 0
+                        IERASE 0000cbea 0
+                        IWRITE 0000cc0e 0
+                       IWRITE1 0000cc16 0
+                         COMMA 0000cc32 0
+                         CALLC 0000cc48 0
+                         BCOMP 0000cc56 0
+                         COMPI 0000cc60 0
+                         LITER 0000cc7c 0
+                         STRCQ 0000cc88 0
+                        STRCQ1 0000cc96 0
+                        STRCQ2 0000cca2 0
+                           FOR 0000ccb8 0
+                         BEGIN 0000cccc 0
+                          NEXT 0000ccde 0
+                         UNTIL 0000ccf2 0
+                         AGAIN 0000cd06 0
+                           IFF 0000cd18 0
+                         AHEAD 0000cd2a 0
+                         REPEA 0000cd46 0
+                         THENN 0000cd5c 0
+                           AFT 0000cd6e 0
+                         ELSEE 0000cd84 0
+                         WHILE 0000cd98 0
+                         ABRTQ 0000cdac 0
+                          STRQ 0000cdbe 0
+                          DOTQ 0000cdd0 0
+                         UNIQU 0000cddc 0
+                         UNIQ1 0000cdf8 0
+                         SNAME 0000cdfc 0
+                         SNAM1 0000ce1c 0
+                         SCOMP 0000ce26 0
+                         SCOM1 0000ce42 0
+                         SCOM2 0000ce46 0
+                         SCOM3 0000ce50 0
+                         OVERT 0000ce52 0
+                         SEMIS 0000ce64 0
+                         RBRAC 0000ce76 0
+                         COLON 0000ce88 0
+                        HEADER 0000ce9a 0
+                         CREAT 0000ceb6 0
+                         CONST 0000ced0 0
+                         VARIA 0000cee6 0
+                          TICK 0000cef8 0
+                         TICK1 0000cf06 0
+                          DUMP 0000cf10 0
+                         DUMP1 0000cf1a 0
+                         DUMP2 0000cf2a 0
+                          DOTS 0000cf54 0
+                         DOTS1 0000cf62 0
+                         DOTS2 0000cf68 0
+                         TNAME 0000cf76 0
+                         TNAM1 0000cf80 0
+                         TNAM2 0000cf9a 0
+                         DOTID 0000cfa0 0
+                         WORDS 0000cfb8 0
+                         WORS1 0000cfc2 0
+                         WORS2 0000cfd6 0
+                            HI 0000cfde 0
+                         APPST 0000cffe 0
+                         FSCAN 0000d01a 0
+                         FSCN1 0000d022 0
+                        QFLASH 0000d04a 0
+                          COLD 0000d06a 0
+                          init 0000d088 0
+                          CTOP 0000d0a0 0
+                         UZERO 00001000 0
+                         ULAST 00001016 0
+                       intvecs 00001016 0
+ -> Total symbols: 279
+
+Include Paths: .
+               /usr/local/share/naken_asm/include
+               include
+ Instructions: 441
+   Code Bytes: 1322
+   Data Bytes: 2958
+  Low Address: 1000 (4096)
+ High Address: ffff (65535)
+

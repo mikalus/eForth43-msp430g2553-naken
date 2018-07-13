@@ -1,0 +1,128 @@
+\ 430eForth43n1: MARKER                                               MM-180702
+\ -----------------------------------------------------------------------------
+\                   FLASH Tools for 430eForth43n1
+\
+\      (C) 2018 Manfred Mahlow   firstname DOT lastname AT forth-ev.de
+\
+\            License: MIT License (see enclosed file License.txt)
+\ -----------------------------------------------------------------------------
+
+\ requires 430eForth43n1
+' IERASE DROP
+
+CP @ DUP HEX U.
+
+DECIMAL
+
+
+: SAVE ( -- )
+\ Save the current user variables as cold start data.
+  'BOOT @ APP! ;
+
+
+: \ipa  \ IPALIGNED ( a1 -- a2 )
+\ Return a page-aligned Flash Memory address.
+    DUP $FE00 AND SWAP OVER = NOT ( a -1|0 ) $200 AND + ( a2 )
+;
+
+
+: \ef ( DP LAST CP a1 a2 )   \ a1 = boot vector  a2 = page aligned flash addr
+\ Erase flash from page aligned addr a2 to $FFFF and (re-)set the COLD start 
+\ data (DP LAST CONTEXT CP 'BOOT Reset-Vector).
+    BEGIN DUP IERASE $200 + DUP 0 = UNTIL DROP   \ erase flash from a2 to $FFFF
+    ( ... CP a1 ) $FFFE I!    \ restore reset vector
+    ( DP LAST CP ) DUP CP !   \ restore CP
+    'BOOT @ U<  \ 'BOOT invalid ?
+    IF          \ restore 'BOOT
+      ( DP LAST ) [ ' HI LITERAL ] 'BOOT !
+    THEN
+    DUP ( DP LAST LAST )
+  [ DP 2 + LITERAL ] !    \ restore LAST
+  [ CP 2 - LITERAL ] !    \ restore CONTEXT    
+    DP !                  \ restore DP
+    'BOOT @ APP!          \ save COLD start data
+;
+
+
+: MARKER ( "name" -- )
+\ Create a marker and save the current eForth state. Aborts with message ?flash
+\ if there is not enough free flash memory available.
+\ A marker, when executed, removes itself and all later defined words from the
+\ dictionary and resets the dictionary pointers to their previous values.
+  CP @ 1 + -2 AND         \ align CP
+  DUP \ipa ( CP pa )      \ pa = addr of next free flash page
+  DUP 0 = ABORT"  ?flash"
+  DUP CP ! SWAP ( pa CP )
+  DP 2 + @      ( pa CP LAST )
+  DP @          ( pa CP LAST DP )
+  : \ start marker definition, create header at address pa
+    [ ' LITERAL , ]          \ save DP
+    [ ' LITERAL , ]          \ save LAST
+    [ ' LITERAL , ]          \ save CP
+    $FFFE @ [ ' LITERAL , ]  \ save boot vector
+    ( pa )  [ ' LITERAL , ]  \ save new page addr
+    [ ' \ef 4 + LITERAL ' AGAIN , ]  \ a jump to \ef 
+  [ ' ; , ]  \ terminate marker definition
+  SAVE       \ save marker
+;
+
+CP @ SWAP - DECIMAL U.
+
+\ -----------------------------------------------------------------------------
+\ Last Revision: MM-180708
+
+
+
+\ 430eForth43n1: RESET                                                MM-180630
+\ -----------------------------------------------------------------------------
+\                   FLASH Tools for 430eForth43n1
+\
+\      (C) 2017 Manfred Mahlow   firstname DOT lastname AT forth-ev.de
+\
+\            License: MIT License (see enclosed file License.txt)
+\ -----------------------------------------------------------------------------
+
+\ #require MARKER
+
+CP @ DUP HEX U.
+
+DECIMAL
+
+: RESET ( -- )
+\ Reset the 430eForth. Resets the user variables CP DP LAST CONTEXT and 'BOOT ,
+\ deletes all user-defined words from Flash Memory and updates the cold-start
+\ data in the Flash Information Memory.
+  \ at compile time:
+  [ DP     @ LITERAL   \ save DP 
+    DP 2 + @ LITERAL   \ save LAST
+    CP @ 2 + ( a* )    \ a* = addr to be patched with the address of
+    $FFFF LITERAL ]    \      the next free flash memory page
+  \ at execute time:
+    ( DP LAST a1 )           \ a1 = page addr
+    DUP 2 - @ ( ... a1 a2 )  \ a2 = boot vector
+    OVER   ( ... a1 a2 a4 )  \ a1 = CP  a2 = boot vector  a4 = page addr
+    -1 'BOOT !               \ invalidate 'BOOT, to be reset in \ef
+    \ef                      \ erase user flash and restore user variables
+    0 EXECUTE                \ restart eForth
+; ( a* )
+
+CP @ HEX U.
+
+( a* ) CP @ 2 + \ipa ( a* a1 )   \ a1 = next page addr
+DUP ROT I!           ( a1 )      \ patch a1 to a* in RESET
+$FFFE @ OVER 2 - I!  ( a1 )      \ save boot vector to a1-2
+
+\ First flash page for the user dictionary:
+( a1 ) DUP U.
+
+\ Unused bytes in the top flash page of the eForth core:
+( a1 ) 2 - CP @ - DECIMAL U.
+
+RESET
+
+\ -----------------------------------------------------------------------------
+\ Last Revision: MM-180708 'FSCAN rempved. No longer needed.
+\                MM-180703 \ef factored out, moved to file MARKER
+\                MM-180701 Updated for 430eForth43n1
+
+

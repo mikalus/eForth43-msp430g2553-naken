@@ -1,16 +1,37 @@
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;CCS:   ;mk
-;	.nolist 
-;	.title "msp430 eForth 4.3" 
-;	.cdecls C,LIST,"msp430g2553.h"  ; Include device header file 
-
-;naken: ;mk
-    .msp430 
-    .include "msp430g2553.inc"  ; MCU-specific register equates 
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; This is a 430eForth assembler listing based on the original script from
+; Dr. Chen Hanson Ting as described in his book: Zen and the Forth Language:
+; EFORTH for the MSP430 from Texas Instruments (Kindle Edition). It was first
+; written by him in IAR Assembler, then transferred to the CCS and now adapted
+; by Michael Kalus for the naken_asm.
+;
+; MIT License
+; ----------------------------------------------------------------------------
+; Copyright (c) 2014 Dr. Chen-Hanson Ting  CCS Version    430eForth4.3
+;           (c) 2018 Michael Kalus         Naken Version  430eForth4.3n
+;           (c) 2018 Manfred Mahlow          Flash Tools  430eForth4.3n1
+;
+; Permission is hereby granted, free of charge, to any person obtaining a copy
+; of this software and associated documentation files (the "Software"), to deal
+; in the Software without restriction, including without limitation the rights
+; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+; copies of the Software, and to permit persons to whom the Software is
+;furnished to do so, subject to the following conditions:
+;
+; The above copyright notice and this permission notice shall be included in all
+; copies or substantial portions of the Software.
+;
+; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+; SOFTWARE.
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
 ; 7/7/2012 430eForth1.0, from eForth86.asm and 430uForth
 ; 7/4/2012 Move 430uForth2.1 from IAR to CCS 5.2
 ; 8/5/2014 Move 430eForth2.2 to CCS 6.0.  Fix linkage of OVER.
@@ -25,16 +46,39 @@
 ; 10/11/2014 430eForth4.1 Direct thread, more optimization
 ; 10/23/2014 430eForth4.2 Direct thread, pack lists
 ; 11/12/2014 430eForth4.2 Direct thread, final
-; 05/13/2018 Moved 430eForth4.3 from CSS to Michael Kohn's naken_asm (ver. 23 april 2018) - ok ;mk 
-; 20180624 $," - bug fixed. Thanks to Manfred Mahlow. ;mk
-
+;
 ; Build for and verified on MSP430G2 LaunchPad from TI
 ; Assembled with Code Composer Sudio 6.0 IDE
 ; Internal DCO at 8 MHz
 ; Hardware UART at 9600 baud. TXD and RXD must be crossed.
+
+;CCS:   ;ting
+;	.nolist 
+;	.title "msp430 eForth 4.3" 
+;	.cdecls C,LIST,"msp430g2553.h"  ; Include device header file 
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;
+; 05/13/2018 Moved 430eForth4.3 from CSS to Michael Kohn's naken_asm (ver.
+;            23 april 2018) - ok                                           ;mk
+; 20180624 $," - bug fixed. Thanks to Manfred Mahlow.                      ;mk
+; 20180628 DIGIT? : bug fix, 0= 0> were handled as numbers                 ;MM
+; 20180629 FSCAN added, sets CP to the lowest free flash addr at BOOT time.
+;          FSCAN is executed before COLD executes QUIT.
+;          Version string changed in HI from 43n to 43n1.                  ;MM
+; 20180630 ERASE and WRITE renamed to IERASE IWRITE due to name conflict   ;MM
+; 20180701 LITERAL and ALIGNED revealed.                                   ;MM
+; 20180707 Flash Test QFLASH ( a -- a ) added. Aborts with message ?flash
+;          if a > EDM. (EDM = End of Dictionary Memory space in the flash) ;MM
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;naken: ;mk
+    .msp430 
+    .include "msp430g2553.inc"  ; MCU-specific register equates for naken_asm
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 ; Direct Thread Model of eForth
 
 ; CCS: .equ ; naken: equ   ;mk
@@ -769,8 +813,8 @@ TWOSL:
 
 ;   ALIGNED	( b -- a )
 ;	Align address to the cell boundary.
-;	.dw	TWOSL-4
-;	.db 7,"ALIGNED"
+	.dw	TWOSL-4
+	.db 7,"ALIGNED"
 ALGND:
 	add	#1,tos
 	bic	#1,tos
@@ -788,7 +832,8 @@ TCHAR:
 
 ;   DEPTH	( -- n )
 ;	Return the depth of the data stack.
-	.dw	TWOSL-4
+;	.dw	TWOSL-4      ;MM180701
+  .dw ALGND-8      ;
 	.db 5,"DEPTH"
 DEPTH:
 	mov	stack,temp0
@@ -1098,6 +1143,10 @@ DIGTQ:
 	cmp	#10,temp0
 	jl	DIGTQ1
 	sub	#7,temp0
+; -- bug fix MM-180628 --
+  cmp #10,temp0
+  jl FALSE1
+; -----------------------  
 DIGTQ1:
 	cmp	tos,temp0
 	mov	temp0,0(stack)
@@ -1495,6 +1544,7 @@ ERROR:
 	.dw	SPACE,COUNT,TYPEE,DOLIT
 	.dw	3FH,EMIT,CR,SPSTO,QUIT
 
+
 ;   abort"	( f -- )
 ;	Run time routine of ABORT" . Abort with a message.
 ;	.dw	ERROR-6
@@ -1545,6 +1595,7 @@ DOTOK:
 	.dw	DOTQP
 	.db 3," ok"
 DOTO1:	.dw	CR,EXIT
+
 
 ;   ?STACK	( -- )
 ;	Abort if the data stack underflows.
@@ -1614,10 +1665,20 @@ ISTORE:
 	mov	#FWKEY+LOCK,&FCTL3 ; Set LOCK
 	INEXT
 
-;   ERASE	( a -- )
+;--------------------------------------- ; MM-180707
+; ?I! ( n a -- )
+;	Store n to address a in code dictionary.
+; Abort if user dictionary space is full.
+QISTOR:
+  INEST 
+  .dw QFLASH,ISTORE,EXIT
+; --------------------------------------
+
+;   IERASE	( a -- )
 ;	Erase a segment at address a.
 	.dw	ISTORE-4
-	.db 5,"ERASE"
+;	.db 5,"ERASE"   MM-180630
+	.db 6,"IERASE",0
 IERASE:
 	mov	#FWKEY,&FCTL3 ; Clear LOCK
 	mov	#FWKEY+ERASE,&FCTL1 ; Enable erase
@@ -1626,26 +1687,31 @@ IERASE:
 	pops
 	INEXT
 
-;   WRITE	( src dest n -- )
+;   IWRITE	( src dest n -- )
 ;	Copy n byte from src to dest.  Dest is in flash memory.
-	.dw	IERASE-6
-	.db 5,"WRITE"
-WRITE:
+;	.dw	IERASE-6   MM-180630
+	.dw	IERASE-8
+;	.db 5,"WRITE"  MM-180630
+	.db 6,"IWRITE",0
+IWRITE:
 	INEST
 	.dw	TWOSL,TOR
-WRITE1:
-	.dw	OVER,AT,OVER,ISTORE
+IWRITE1:
+;	.dw	OVER,AT,OVER,ISTORE    ;MM-180707
+	.dw	OVER,AT,OVER,QISTOR    ;
 	.dw	CELLP,SWAP,CELLP,SWAP
-	.dw	DONXT,WRITE1
+	.dw	DONXT,IWRITE1
 	.dw	DDROP,EXIT
 
 ;   ,	( w -- )
 ;	Compile an integer into the code dictionary.
-	.dw	WRITE-6
+;	.dw	WRITE-6   MM-180630
+	.dw	IWRITE-8
 	.db 1,","
 COMMA:
 	INEST
-	.dw	CP,AT,DUPP,CELLP	;cell boundary
+;	.dw	CP,AT,DUPP,CELLP	;cell boundary                     ;MM-180707
+	.dw	CP,AT,QFLASH,DUPP,CELLP	;cell boundary + flash test  ;
 	.dw	CP,STORE,ISTORE,EXIT
 
 ;   call,	( w -- )
@@ -1677,7 +1743,8 @@ COMPI:
 ;   LITERAL	( w -- )
 ;	Compile tos to code dictionary as an integer literal.
 ;	.dw	COMPI-8
-;	.db IMEDD+7,"LITERAL"
+  .dw COMMA-2               ; MM-180701
+	.db IMEDD+7,"LITERAL"     ;
 LITER:
 	INEST
 	.dw	COMPI,DOLIT,COMMA,EXIT
@@ -1688,7 +1755,7 @@ LITER:
 ;	.db 3,"$,"""
 STRCQ:
 	INEST
-;    .dw     DOLIT,""""      ; MM-180624 assembles to |DOLIT|0000H|
+;   .dw     DOLIT,""""      ; MM-180624 assembles to |DOLIT|0000H|
     .dw     DOLIT,0022H     ;           should be |DOLIT|ASCII(")|
 	.dw	WORDD	;move string to code dictionary
 	.dw	STRCQ1,EXIT
@@ -1706,7 +1773,8 @@ STRCQ2:
 
 ;   FOR	( -- a )
 ;	Start a FOR-NEXT loop structure in a colon definition.
-	.dw	COMMA-2
+;	.dw	COMMA-2     ; MM-180701
+  .dw LITER-8
 	.db IMEDD+3,"FOR"
 FOR:
 	INEST
@@ -1776,7 +1844,7 @@ REPEA:
 	.db IMEDD+4,"THEN",0
 THENN:
 	INEST
-	.dw	BEGIN,SWAP,ISTORE,EXIT
+	.dw	BEGIN,SWAP,QISTOR,EXIT
 
 ;   AFT	( a -- a A )
 ;	Jump to THEN in a FOR-AFT-THEN-NEXT loop the first time through.
@@ -2042,22 +2110,49 @@ WORS2:
 HI:
 	INEST
 	.dw	CR,DOTQP
-	.db 12,"430eForth43n",0	;model
-	.dw	CR,EXIT
+	.db 13,"430eForth43n1"	;model
+;	.dw	CR,EXIT   ; MM-180629
+	.dw	EXIT
 
 ;   APP!	( a -- )	Turnkey
-;	HEX : APP! 200 ! 1000 ERASE 200 1000 20 WRITE ;
+;	HEX : APP! 200 ! 1000 IERASE 200 1000 20 IWRITE ;
 	.dw	HI-4
 	.db 4,"APP!",0
 APPST:
 	INEST
 	.dw	TBOOT,STORE,DOLIT,0x1000,IERASE
 	.dw	TBOOT,DOLIT,0x1000,DOLIT,0x20
-	.dw	WRITE,EXIT
+	.dw	IWRITE,EXIT
+
+; -- Flash tools ------------------------ ; MM-180629 ...
+
+EDM equ 0FFC0H-2  ; top of users dictionary space in the flash memory
+
+; FSCAN ( -- )  ; MM-180629
+; Scan the Flash memory from EDM downwards and set CP to the next free cell
+; above the last used one.
+FSCAN:
+  INEST
+   .dw DOLIT,EDM
+FSCN1:
+   .dw DOLIT,2,SUBB,DUPP,AT,DOLIT,EM,SUBB
+   .dw QBRAN,FSCN1
+   .dw DOLIT,2,PLUS,CP,AT,ALGND,MAX,CP,STORE,EXIT  ;
+
+; ?flash ( a -- a )  ; MM-180707
+; Abort if user dictionary is full ( a > EDM )
+QFLASH:
+; EDM OVER U< ABORT"  ?Flash"
+  INEST 
+  .dw DOLIT,EDM,OVER,ULESS,ABORQ,
+  .db 7," ?flash"
+  .dw EXIT
+
+; ---------------------------------------------------------
 
 ;   COLD	( -- )
 ;	The hilevel cold start sequence.
-	.dw	APPST-6
+ 	.dw	APPST-6
 	.db 4,"COLD",0
 COLD:
 	INEST
@@ -2065,6 +2160,7 @@ COLD:
 	.dw	DOLIT,UZERO,DOLIT,UPP
 	.dw	DOLIT,ULAST-UZERO,CMOVE	;initialize user area
 	.dw	TBOOT,ATEXE	;application boot
+  .dw FSCAN,CR                                    ;MM-180629
 	.dw	QUIT	;start interpretation
 
 init:                ;mk Put it closer to cold : jmp was out of range.
@@ -2074,7 +2170,6 @@ init:                ;mk Put it closer to cold : jmp was out of range.
 	mov.w   #WDTPW+WDTHOLD,&WDTCTL  ; Stop watchdog timer
 	bis.b   #041h,&P1DIR	; P1.0/6 output
 	jmp	COLD
-
 
 CTOP:
 
@@ -2111,7 +2206,7 @@ ULAST:
 ; Interrupt vectors are located in the range FFE0-FFFFh.
 ;       .org 0FFE0h
 intvecs: 
-;        DC16 VECAREA+00     ; FFE0 - not used
+;        DC16 VECAREA+00      ; FFE0 - not used
 ;        DC16  VECAREA+04     ; FFE2 - not used
 ;        DC16  VECAREA+08     ; FFE4 - IO port P1
 ;        DC16  VECAREA+12     ; FFE6 - IO port P2
@@ -2127,7 +2222,7 @@ intvecs:
 ;        DC16  VECAREA+52     ; FFFA - Timer 1_A3
 ;        DC16  VECAREA+56     ; FFFC - NMI, osc.fault, flash violation
          .org 0FFFEh
-         DC16  init       ; FFFE - Reset
+         DC16  init           ; FFFE - Reset
 
 	.end
 ;===============================================================
