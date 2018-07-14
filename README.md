@@ -116,6 +116,7 @@ Those interested should use the newer version 43n1.
 Background knowledge on the reset trap:  
 Vierte Dimension 3/2017, "Das RAM–ROM–Dilemma von interaktivem Forth in kleinen MCUs", Michael Kalus.  
 https://wiki.forth-ev.de/lib/exe/fetch.php/vd-archiv:4d2017-03.pdf  
+https://wiki.forth-ev.de/lib/exe/fetch.php/events:430eforth-tips_tools_tests2017.pdf  
 
 ## To Do
 Discard input stream if an error occurs.
